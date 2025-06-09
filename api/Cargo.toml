@@ -21,3 +21,6 @@ tower-http = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 base64 = { workspace = true }
+html-escape = { workspace = true }
+url = { workspace = true }
+tower-governor = { workspace = true }
