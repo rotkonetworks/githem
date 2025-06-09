@@ -1,0 +1,16 @@
+[package]
+name = "githem-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "githem"
+path = "src/main.rs"
+
+[dependencies]
+githem-core = { path = "../core" }
+anyhow = { workspace = true }
+clap = { workspace = true }
+git2 = { workspace = true }

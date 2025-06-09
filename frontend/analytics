@@ -1,0 +1,298 @@
+use anyhow::{Context, Result};
+use clap::Parser;
+use git2::{Repository, Status, StatusOptions};
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+
+#[derive(Parser)]
+#[command(name = "githem")]
+#[command(about = "Transform git repositories into LLM-ready text", long_about = None)]
+#[command(version, author = "Rotko Networks <hq@rotko.net>")]
+struct Cli {
+    /// Repository source (local path or git URL, defaults to current directory)
+    #[arg(default_value = ".")]
+    source: String,
+    
+    /// Output file (default: stdout)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+    
+    /// Include only files matching pattern (can be specified multiple times)
+    #[arg(short, long)]
+    include: Vec<String>,
+    
+    /// Exclude files matching pattern (in addition to .gitignore)
+    #[arg(short, long)]
+    exclude: Vec<String>,
+    
+    /// Maximum file size in bytes (default: 1MB)
+    #[arg(short = 's', long, default_value = "1048576")]
+    max_size: usize,
+    
+    /// Branch to checkout (remote repos only)
+    #[arg(short, long)]
+    branch: Option<String>,
+    
+    /// Include untracked files
+    #[arg(short = 'u', long)]
+    untracked: bool,
+    
+    /// Quiet mode (no header output)
+    #[arg(short = 'q', long)]
+    quiet: bool,
+}
+
+struct Ingester {
+    repo: Repository,
+    include_patterns: Vec<String>,
+    exclude_patterns: Vec<String>,
+    max_size: usize,
+    include_untracked: bool,
+}
+
+impl Ingester {
+    fn new(repo: Repository, cli: &Cli) -> Self {
+        Self {
+            repo,
+            include_patterns: cli.include.clone(),
+            exclude_patterns: cli.exclude.clone(),
+            max_size: cli.max_size,
+            include_untracked: cli.untracked,
+        }
+    }
+    
+    fn should_include(&self, path: &Path) -> Result<bool> {
+        // Check git status (respects .gitignore)
+        let status = self.repo.status_file(path)?;
+        
+        // Skip ignored files unless untracked flag is set
+        if status.contains(Status::IGNORED) && !self.include_untracked {
+            return Ok(false);
+        }
+        
+        // Skip git internal files
+        if path.components().any(|c| c.as_os_str() == ".git") {
+            return Ok(false);
+        }
+        
+        let path_str = path.to_string_lossy();
+        
+        // Apply exclude patterns
+        for pattern in &self.exclude_patterns {
+            if glob_match(pattern, &path_str) {
+                return Ok(false);
+            }
+        }
+        
+        // Apply include patterns (if any specified)
+        if !self.include_patterns.is_empty() {
+            return Ok(self.include_patterns.iter().any(|p| glob_match(p, &path_str)));
+        }
+        
+        Ok(true)
+    }
+    
+    fn ingest(&self, output: &mut dyn Write) -> Result<()> {
+        let workdir = self.repo.workdir()
+            .context("Repository has no working directory")?;
+        
+        // Handle empty/new repositories
+        let head_result = self.repo.head();
+        let has_commits = head_result.is_ok();
+        
+        let mut files: Vec<PathBuf> = Vec::new();
+        
+        if has_commits {
+            // Get tracked files from HEAD
+            let head = head_result?;
+            let tree = head.peel_to_tree()?;
+            
+            tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+                if entry.kind() == Some(git2::ObjectType::Blob) {
+                    if let Some(name) = entry.name() {
+                        let path = if dir.is_empty() {
+                            PathBuf::from(name)
+                        } else {
+                            PathBuf::from(dir).join(name)
+                        };
+                        files.push(path);
+                    }
+                }
+                git2::TreeWalkResult::Ok
+            })?;
+        }
+        
+        // Add untracked files if requested or if repo is empty
+        if self.include_untracked || !has_commits {
+            let mut status_opts = StatusOptions::new();
+            status_opts.include_untracked(true);
+            status_opts.include_ignored(false);
+            
+            let statuses = self.repo.statuses(Some(&mut status_opts))?;
+            
+            for status in statuses.iter() {
+                if status.status().contains(Status::WT_NEW) {
+                    if let Some(path) = status.path() {
+                        files.push(PathBuf::from(path));
+                    }
+                }
+            }
+        }
+        
+        // Sort for consistent output
+        files.sort();
+        files.dedup();
+        
+        // Process files
+        let mut processed = 0;
+        for file in files {
+            let full_path = workdir.join(&file);
+            
+            if !full_path.exists() || !full_path.is_file() {
+                continue;
+            }
+            
+            if !self.should_include(&file)? {
+                continue;
+            }
+            
+            self.ingest_file(&full_path, &file, output)?;
+            processed += 1;
+        }
+        
+        if processed == 0 {
+            eprintln!("Warning: No files found to ingest");
+        }
+        
+        Ok(())
+    }
+    
+    fn ingest_file(&self, path: &Path, relative: &Path, output: &mut dyn Write) -> Result<()> {
+        let metadata = fs::metadata(path)?;
+        
+        if metadata.len() > self.max_size as u64 {
+            return Ok(());
+        }
+        
+        let content = fs::read_to_string(path)
+            .unwrap_or_else(|_| "[Binary file]".to_string());
+        
+        writeln!(output, "=== {} ===", relative.display())?;
+        writeln!(output, "{}", content)?;
+        writeln!(output)?;
+        
+        Ok(())
+    }
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    
+    let repo = if is_remote_url(&cli.source) {
+        clone_repository(&cli.source, cli.branch.as_deref())?
+    } else {
+        let path = PathBuf::from(&cli.source);
+        if !path.join(".git").exists() {
+            eprintln!("Error: Not a git repository (or any parent up to mount point /)");
+            eprintln!("Use 'git init' to create a repository or specify a remote URL");
+            std::process::exit(1);
+        }
+        Repository::open(&path)
+            .context("Failed to open repository")?
+    };
+    
+    // Checkout branch if specified for local repos
+    if !is_remote_url(&cli.source) && cli.branch.is_some() {
+        checkout_branch(&repo, cli.branch.as_ref().unwrap())?;
+    }
+    
+    let ingester = Ingester::new(repo, &cli);
+    
+    // Setup output
+    let mut output: Box<dyn Write> = match cli.output {
+        Some(path) => Box::new(fs::File::create(path)?),
+        None => Box::new(io::stdout()),
+    };
+    
+    // Write header unless quiet mode
+    if !cli.quiet {
+        writeln!(output, "# Repository: {}", cli.source)?;
+        writeln!(output, "# Generated by githem-cli (rotko.net)\n")?;
+    }
+    
+    // Ingest files
+    ingester.ingest(&mut output)?;
+    
+    Ok(())
+}
+
+fn is_remote_url(source: &str) -> bool {
+    source.starts_with("https://") || 
+    source.starts_with("git://") ||
+    source.starts_with("git@") ||
+    source.starts_with("ssh://")
+}
+
+fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
+    let path = std::env::temp_dir().join(format!("githem-{}", uuid::Uuid::new_v4()));
+    
+    let mut builder = git2::build::RepoBuilder::new();
+    
+    if let Some(branch) = branch {
+        builder.branch(branch);
+    }
+    
+    let repo = builder.clone(url, &path)
+        .context("Failed to clone repository")?;
+    
+    Ok(repo)
+}
+
+fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {
+    let (object, reference) = repo.revparse_ext(branch_name)?;
+    
+    repo.checkout_tree(&object, None)?;
+    
+    match reference {
+        Some(gref) => repo.set_head(gref.name().unwrap())?,
+        None => repo.set_head_detached(object.id())?,
+    }
+    
+    Ok(())
+}
+
+fn glob_match(pattern: &str, path: &str) -> bool {
+    if pattern.starts_with("*.") {
+        return path.ends_with(&pattern[1..]);
+    }
+    
+    if pattern.ends_with("/*") {
+        let prefix = &pattern[..pattern.len() - 2];
+        return path.starts_with(prefix) && path.len() > prefix.len();
+    }
+    
+    if pattern.contains('*') {
+        let parts: Vec<&str> = pattern.split('*').collect();
+        if parts.len() == 2 {
+            return path.starts_with(parts[0]) && path.ends_with(parts[1]);
+        }
+    }
+    
+    path == pattern || path.starts_with(&format!("{}/", pattern))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_glob_match() {
+        assert!(glob_match("*.rs", "main.rs"));
+        assert!(glob_match("*.rs", "src/main.rs"));
+        assert!(glob_match("src/*", "src/main.rs"));
+        assert!(glob_match("src/*", "src/lib.rs"));
+        assert!(!glob_match("*.rs", "main.py"));
+        assert!(glob_match("target", "target/debug/main"));
+    }
+}

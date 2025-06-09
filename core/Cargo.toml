@@ -1,0 +1,13 @@
+[package]
+name = "githem-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+git2 = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+atty = { workspace = true }
