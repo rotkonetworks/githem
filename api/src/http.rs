@@ -1,367 +1,474 @@
-// http.rs
-use anyhow::Result;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
 use axum::{
-    extract::{Path, Query},
-    http::{header, HeaderMap, StatusCode},
-    response::{Html, IntoResponse, Response},
-    routing::get,
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Json},
+    routing::{get, post},
     Router,
 };
-use githem_core::{IngestOptions, Ingester};
-use html_escape::encode_text;
-use serde::Deserialize;
-use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use githem_core::{IngestOptions, Ingester, is_remote_url};
+use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use tower::ServiceBuilder;
 use tower_governor::{
-    governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer,
+    governor::GovernorConfigBuilder, 
+    key_extractor::SmartIpKeyExtractor,
+    GovernorLayer,
 };
-use tower_http::compression::CompressionLayer;
-use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
-use tracing::{info, warn};
-use url::Url;
+use tower_http::{
+    compression::CompressionLayer,
+    cors::CorsLayer,
+};
 
-const CLONE_TIMEOUT: Duration = Duration::from_secs(300);
-const INGEST_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_RESPONSE_SIZE: usize = 50 * 1024 * 1024;
+const INGEST_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 
-#[derive(Debug, Deserialize)]
-struct QueryParams {
-    #[serde(default)]
-    include: Vec<String>,
-    #[serde(default)]
-    exclude: Vec<String>,
-    #[serde(default = "default_max_size")]
-    max_size: usize,
-    #[serde(default)]
-    raw: bool,
+#[derive(Clone)]
+pub struct AppState {
+    pub cache: Arc<tokio::sync::RwLock<HashMap<String, CachedResult>>>,
 }
 
-fn default_max_size() -> usize {
-    1048576
+#[derive(Clone, Debug)]
+pub struct CachedResult {
+    pub result: IngestionResult,
+    pub created_at: Instant,
 }
 
-fn validate_github_url(url: &str) -> Result<()> {
-    let parsed = Url::parse(url)
-        .map_err(|_| anyhow::anyhow!("Invalid URL format"))?;
-    
-    // Only allow github.com
-    if parsed.host_str() != Some("github.com") {
-        anyhow::bail!("Only github.com repositories are allowed");
-    }
-    
-    // Only allow HTTPS
-    if parsed.scheme() != "https" {
-        anyhow::bail!("Only HTTPS URLs are allowed");
-    }
-    
-    // Prevent private networks by checking for localhost/private IPs
-    if let Some(host) = parsed.host_str() {
-        if host.starts_with("127.") || host == "localhost" || 
-           host.starts_with("10.") || host.starts_with("192.168.") ||
-           host.starts_with("172.") {
-            anyhow::bail!("Private/internal URLs are not allowed");
+impl AppState {
+    pub fn new() -> Self {
+        Self {
+            cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         }
     }
-    
-    Ok(())
 }
 
-fn validate_subpath(subpath: &str) -> Result<String> {
-    // Prevent path traversal attacks
-    if subpath.contains("..") || subpath.contains("//") || subpath.contains("\\") {
-        anyhow::bail!("Invalid path: path traversal not allowed");
-    }
-    
-    // Additional security: only allow safe characters
-    if subpath.chars().any(|c| !c.is_ascii() || c.is_control()) {
-        anyhow::bail!("Invalid path: non-ASCII or control characters not allowed");
-    }
-    
-    // Canonicalize path by filtering out dangerous components
-    let path = std::path::Path::new(subpath)
-        .components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(s) => s.to_str(),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/");
-        
-    Ok(path)
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IngestRequest {
+    pub url: String,
+    pub branch: Option<String>,
+    pub subpath: Option<String>,
+    #[serde(default)]
+    pub include_patterns: Vec<String>,
+    #[serde(default)]
+    pub exclude_patterns: Vec<String>,
+    #[serde(default = "default_max_file_size")]
+    pub max_file_size: usize,
 }
 
-struct AppError(anyhow::Error);
+fn default_max_file_size() -> usize {
+    10 * 1024 * 1024 // 10MB
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestionResult {
+    pub id: String,
+    pub summary: IngestionSummary,
+    pub tree: String,
+    pub content: String,
+    pub metadata: RepositoryMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestionSummary {
+    pub repository: String,
+    pub branch: String,
+    pub subpath: Option<String>,
+    pub files_analyzed: usize,
+    pub total_size: usize,
+    pub estimated_tokens: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepositoryMetadata {
+    pub url: String,
+    pub default_branch: String,
+    pub branches: Vec<String>,
+    pub size: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IngestResponse {
+    pub id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ErrorResponse {
+    pub error: String,
+    pub code: String,
+}
+
+#[derive(Debug)]
+pub enum AppError {
+    InvalidRequest(String),
+    IngestionFailed(String),
+    NotFound,
+    Timeout,
+    InternalError(String),
+}
 
 impl IntoResponse for AppError {
-    fn into_response(self) -> Response {
-        warn!(error = %self.0, "Request failed");
-        
-        // Sanitize error messages for external users - don't expose internal details
-        let (status, user_msg) = match self.0.to_string() {
-            msg if msg.contains("authentication") => (StatusCode::UNAUTHORIZED, "Authentication required"),
-            msg if msg.contains("not found") || msg.contains("Repository") => (StatusCode::NOT_FOUND, "Repository not found"),
-            msg if msg.contains("timeout") => (StatusCode::REQUEST_TIMEOUT, "Request timed out"),
-            msg if msg.contains("Only github.com repositories") => (StatusCode::BAD_REQUEST, "Only GitHub repositories are supported"),
-            msg if msg.contains("Only HTTPS URLs") => (StatusCode::BAD_REQUEST, "Only HTTPS URLs are supported"),
-            msg if msg.contains("Private/internal URLs") => (StatusCode::BAD_REQUEST, "Private/internal URLs are not allowed"),
-            msg if msg.contains("path traversal") => (StatusCode::BAD_REQUEST, "Invalid path"),
-            msg if msg.contains("Invalid path") => (StatusCode::BAD_REQUEST, "Invalid path"),
-            msg if msg.contains("Invalid URL format") => (StatusCode::BAD_REQUEST, "Invalid URL format"),
-            msg if msg.contains("Repository too large") => (StatusCode::PAYLOAD_TOO_LARGE, "Repository too large"),
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+    fn into_response(self) -> axum::response::Response {
+        let (status, error_response) = match self {
+            AppError::InvalidRequest(msg) => (
+                StatusCode::BAD_REQUEST,
+                ErrorResponse {
+                    error: msg,
+                    code: "INVALID_REQUEST".to_string(),
+                },
+            ),
+            AppError::IngestionFailed(msg) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                ErrorResponse {
+                    error: msg,
+                    code: "INGESTION_FAILED".to_string(),
+                },
+            ),
+            AppError::NotFound => (
+                StatusCode::NOT_FOUND,
+                ErrorResponse {
+                    error: "Resource not found".to_string(),
+                    code: "NOT_FOUND".to_string(),
+                },
+            ),
+            AppError::Timeout => (
+                StatusCode::REQUEST_TIMEOUT,
+                ErrorResponse {
+                    error: "Request timed out".to_string(),
+                    code: "TIMEOUT".to_string(),
+                },
+            ),
+            AppError::InternalError(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorResponse {
+                    error: msg,
+                    code: "INTERNAL_ERROR".to_string(),
+                },
+            ),
         };
 
-        (status, user_msg).into_response()
+        (status, Json(error_response)).into_response()
     }
 }
 
-impl<E: Into<anyhow::Error>> From<E> for AppError {
-    fn from(err: E) -> Self {
-        Self(err.into())
-    }
+#[derive(Deserialize)]
+pub struct QueryParams {
+    pub branch: Option<String>,
+    pub subpath: Option<String>,
+    pub include: Option<String>,
+    pub exclude: Option<String>,
+    pub max_size: Option<usize>,
 }
 
-fn is_browser(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| {
-            s.contains("Mozilla") ||
-            s.contains("Chrome") ||
-            s.contains("Safari") && !s.contains("curl") && !s.contains("wget")
-        })
-        .unwrap_or(false)
-}
-
-fn parse_github_path(path: &str) -> Result<(String, Option<String>, Option<String>)> {
-    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-
-    if parts.len() < 2 {
-        anyhow::bail!("Invalid repository path");
-    }
-
-    let owner = parts[0];
-    let repo = parts[1];
-    let mut branch = None;
-    let mut subpath = None;
-
-    if parts.len() > 2 {
-        match parts[2] {
-            "tree" | "blob" if parts.len() > 3 => {
-                branch = Some(parts[3].to_string());
-                if parts.len() > 4 {
-                    let raw_subpath = parts[4..].join("/");
-                    subpath = Some(validate_subpath(&raw_subpath)?);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let repo_url = format!("https://github.com/{}/{}", owner, repo);
+async fn health() -> impl IntoResponse {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     
-    // Validate the URL for SSRF protection
-    validate_github_url(&repo_url)?;
-    
-    Ok((repo_url, branch, subpath))
+    Json(serde_json::json!({
+        "status": "ok",
+        "timestamp": timestamp,
+        "version": env!("CARGO_PKG_VERSION")
+    }))
 }
 
-#[axum::debug_handler]
-async fn handle_request(
-    Path(path): Path<String>,
-    Query(params): Query<QueryParams>,
-    headers: HeaderMap,
+async fn ingest_repository(
+    State(state): State<AppState>,
+    Json(request): Json<IngestRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let start = Instant::now();
-
-    // If browser and no raw param, serve the frontend
-    if is_browser(&headers) && !params.raw {
-        let escaped_path = encode_text(&path);
-        let ws_url = std::env::var("WS_URL").unwrap_or_else(|_| "ws://localhost:3001".to_string());
-        let escaped_ws_url = encode_text(&ws_url);
-        
-        return Ok(Html(format!(
-            r#"<!DOCTYPE html>
-<html>
-<head>
-    <title>githem - {}</title>
-    <meta charset="utf-8">
-    <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-    <div id="app" data-path="{}"></div>
-    <script type="module">
-        window.__INITIAL_PATH__ = "{}";
-        window.__WS_URL__ = "{}";
-    </script>
-    <script src="/static/app.js"></script>
-</body>
-</html>"#,
-            escaped_path, escaped_path, escaped_path, escaped_ws_url
-        )).into_response());
+    
+    // Validate request
+    if request.url.is_empty() {
+        return Err(AppError::InvalidRequest("URL is required".to_string()));
     }
 
-    // Parse the GitHub-style path
-    let (repo_url, branch, subpath) = parse_github_path(&path)?;
+    if !is_remote_url(&request.url) && !std::path::Path::new(&request.url).exists() {
+        return Err(AppError::InvalidRequest("Invalid URL or path".to_string()));
+    }
 
-    info!(
-        repo_url = %repo_url,
-        branch = ?branch,
-        subpath = ?subpath,
-        "Processing repository"
+    // Generate unique ID for this ingestion
+    let id = format!("{}-{}", 
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(),
+        rand::random::<u32>()
     );
 
-    let mut options = IngestOptions {
-        include_patterns: params.include.clone(),
-        exclude_patterns: params.exclude.clone(),
-        max_file_size: params.max_size,
+    // Create ingestion options
+    let options = IngestOptions {
+        include_patterns: request.include_patterns.clone(),
+        exclude_patterns: request.exclude_patterns.clone(),
+        max_file_size: request.max_file_size,
         include_untracked: false,
-        branch: branch.clone(),
+        branch: request.branch.clone(),
     };
 
-    if let Some(ref subpath) = subpath {
-        options.include_patterns.push(format!("{}/*", subpath));
-    }
-
-    let ingester = timeout(CLONE_TIMEOUT, async {
-        Ingester::from_url(&repo_url, options)
+    // Perform ingestion with timeout
+    let ingestion_result = timeout(INGEST_TIMEOUT, async {
+        perform_ingestion(request, options, id.clone()).await
     })
     .await
-    .map_err(|_| anyhow::anyhow!("Repository clone timed out"))??;
+    .map_err(|_| AppError::Timeout)?
+    .map_err(|e| AppError::IngestionFailed(e.to_string()))?;
 
-    info!(elapsed_ms = start.elapsed().as_millis(), "Repository cloned");
+    // Cache the result
+    let cached = CachedResult {
+        result: ingestion_result.clone(),
+        created_at: start,
+    };
+    
+    state.cache.write().await.insert(id.clone(), cached);
 
-    let mut output = Vec::new();
-    timeout(INGEST_TIMEOUT, async {
-        ingester.ingest(&mut output)
+    // Clean up old cache entries (keep last 100)
+    let mut cache = state.cache.write().await;
+    if cache.len() > 100 {
+        let mut entries: Vec<_> = cache.iter().map(|(k, v)| (k.clone(), v.created_at)).collect();
+        entries.sort_by_key(|(_, time)| *time);
+        for (key, _) in entries.iter().take(cache.len() - 100) {
+            cache.remove(key);
+        }
+    }
+    drop(cache);
+
+    Ok(Json(IngestResponse {
+        id: id.clone(),
+        status: "completed".to_string(),
+    }))
+}
+
+async fn perform_ingestion(
+    request: IngestRequest,
+    options: IngestOptions,
+    id: String,
+) -> Result<IngestionResult, Box<dyn std::error::Error + Send + Sync>> {
+    // Create ingester
+    let ingester = if is_remote_url(&request.url) {
+        Ingester::from_url(&request.url, options)?
+    } else {
+        let path = std::path::PathBuf::from(&request.url);
+        Ingester::from_path(&path, options)?
+    };
+
+    // Generate content
+    let mut content = Vec::new();
+    ingester.ingest(&mut content)?;
+    let content_str = String::from_utf8(content)?;
+
+    // Generate tree representation (simplified)
+    let tree = generate_tree_representation(&content_str);
+
+    // Calculate summary
+    let files_analyzed = content_str.matches("=== ").count();
+    let total_size = content_str.len();
+    let estimated_tokens = estimate_tokens(&content_str);
+
+    let summary = IngestionSummary {
+        repository: request.url.clone(),
+        branch: request.branch.unwrap_or_else(|| "main".to_string()),
+        subpath: request.subpath,
+        files_analyzed,
+        total_size,
+        estimated_tokens,
+    };
+
+    // Mock metadata (in real implementation, you'd fetch this from git)
+    let metadata = RepositoryMetadata {
+        url: request.url,
+        default_branch: "main".to_string(),
+        branches: vec!["main".to_string(), "develop".to_string()],
+        size: Some(total_size as u64),
+    };
+
+    Ok(IngestionResult {
+        id,
+        summary,
+        tree,
+        content: content_str,
+        metadata,
+    })
+}
+
+fn generate_tree_representation(content: &str) -> String {
+    let mut tree = String::new();
+    tree.push_str("Repository structure:\n");
+    
+    for line in content.lines() {
+        if line.starts_with("=== ") && line.ends_with(" ===") {
+            let path = &line[4..line.len()-4];
+            tree.push_str(&format!("📄 {}\n", path));
+        }
+    }
+    
+    tree
+}
+
+fn estimate_tokens(content: &str) -> usize {
+    // Rough estimation: ~4 characters per token
+    content.len() / 4
+}
+
+async fn get_result(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let cache = state.cache.read().await;
+    
+    match cache.get(&id) {
+        Some(cached) => {
+            let result = cached.result.clone();
+            drop(cache);
+            Ok(Json(result))
+        },
+        None => Err(AppError::NotFound),
+    }
+}
+
+async fn download_content(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let cache = state.cache.read().await;
+    
+    match cache.get(&id) {
+        Some(cached) => {
+            let content = cached.result.content.clone();
+            let filename = format!("githem-{}.txt", id);
+            drop(cache);
+            
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", "text/plain; charset=utf-8".parse().unwrap());
+            headers.insert("content-disposition", format!("attachment; filename=\"{}\"", filename).parse().unwrap());
+            
+            Ok((headers, content))
+        },
+        None => Err(AppError::NotFound),
+    }
+}
+
+async fn handle_repo(
+    Path((owner, repo)): Path<(String, String)>,
+    Query(params): Query<QueryParams>,
+) -> Result<impl IntoResponse, AppError> {
+    ingest_github_repo(owner, repo, None, None, params).await
+}
+
+async fn handle_repo_branch(
+    Path((owner, repo, branch)): Path<(String, String, String)>,
+    Query(params): Query<QueryParams>,
+) -> Result<impl IntoResponse, AppError> {
+    ingest_github_repo(owner, repo, Some(branch), None, params).await
+}
+
+async fn handle_repo_path(
+    Path((owner, repo, branch, path)): Path<(String, String, String, String)>,
+    Query(params): Query<QueryParams>,
+) -> Result<impl IntoResponse, AppError> {
+    ingest_github_repo(owner, repo, Some(branch), Some(path), params).await
+}
+
+async fn ingest_github_repo(
+    owner: String,
+    repo: String,
+    branch: Option<String>,
+    subpath: Option<String>,
+    params: QueryParams,
+) -> Result<impl IntoResponse, AppError> {
+    let url = format!("https://github.com/{}/{}", owner, repo);
+    let final_branch = branch.or(params.branch);
+    let final_subpath = subpath.or(params.subpath);
+
+    let request = IngestRequest {
+        url,
+        branch: final_branch.clone(),
+        subpath: final_subpath,
+        include_patterns: params.include
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        exclude_patterns: params.exclude
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        max_file_size: params.max_size.unwrap_or(10 * 1024 * 1024),
+    };
+
+    // Actually perform ingestion
+    let start = Instant::now();
+    
+    let id = format!("{}-{}", 
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(),
+        rand::random::<u32>()
+    );
+
+    let options = IngestOptions {
+        include_patterns: request.include_patterns.clone(),
+        exclude_patterns: request.exclude_patterns.clone(),
+        max_file_size: request.max_file_size,
+        include_untracked: false,
+        branch: request.branch.clone(),
+    };
+
+    let ingestion_result = timeout(INGEST_TIMEOUT, async {
+        perform_ingestion(request, options, id.clone()).await
     })
     .await
-    .map_err(|_| anyhow::anyhow!("Ingestion timed out"))??;
+    .map_err(|_| AppError::Timeout)?
+    .map_err(|e| AppError::IngestionFailed(e.to_string()))?;
 
-    if output.len() > MAX_RESPONSE_SIZE {
-        return Err(anyhow::anyhow!(
-            "Repository too large: {} MB (max {} MB)",
-            output.len() / 1024 / 1024,
-            MAX_RESPONSE_SIZE / 1024 / 1024
-        ).into());
-    }
-
-    let total_elapsed = start.elapsed();
-    info!(
-        bytes = output.len(),
-        elapsed_ms = total_elapsed.as_millis(),
-        "Ingestion completed"
-    );
-
-    if params.raw || !is_browser(&headers) {
-        Ok((
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-            output,
-        ).into_response())
-    } else {
-        let files_count = output
-            .windows(3)
-            .filter(|window| window == b"===")
-            .count() / 2;
-
-        let metadata = serde_json::json!({
-            "repository": format!("{}/{}",
-                path.split('/').nth(0).unwrap_or(""),
-                path.split('/').nth(1).unwrap_or("")
-            ),
-            "branch": branch,
-            "subpath": subpath,
-            "files": files_count,
-            "bytes": output.len(),
-            "elapsed_ms": total_elapsed.as_millis(),
-        });
-
-        use base64::{Engine as _, engine::general_purpose};
-        let content_b64 = general_purpose::STANDARD.encode(&output);
-
-        let response = serde_json::json!({
-            "metadata": metadata,
-            "content_base64": content_b64,
-        });
-
-        Ok((StatusCode::OK, axum::Json(response)).into_response())
-    }
+    // Return the content directly for GitHub-style requests
+    Ok(ingestion_result.content)
 }
 
-async fn health() -> &'static str {
-    "OK"
-}
+pub fn create_router() -> Router {
+    let state = AppState::new();
 
-async fn index(headers: HeaderMap) -> impl IntoResponse {
-    if is_browser(&headers) {
-        let ws_url = std::env::var("WS_URL").unwrap_or_else(|_| "ws://localhost:3001".to_string());
-        let escaped_ws_url = encode_text(&ws_url);
-        
-        Html(format!(r#"<!DOCTYPE html>
-<html>
-<head>
-    <title>githem</title>
-    <meta charset="utf-8">
-    <script>window.__WS_URL__ = "{}";</script>
-</head>
-<body>
-    <div id="app"></div>
-    <script src="/static/app.js"></script>
-</body>
-</html>"#, escaped_ws_url)).into_response()
-    } else {
-        (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/plain")],
-            "githem API - Transform git repositories into LLM-ready text\n\
-            \n\
-            HTTP API: GET /:owner/:repo[/tree/:branch[/:path]]\n\
-            WebSocket: ws://localhost:3001\n\
-            \n\
-            Query parameters:\n\
-            - include: Include only files matching pattern\n\
-            - exclude: Exclude files matching pattern\n\
-            - max_size: Maximum file size in bytes\n\
-            - raw: Return plain text\n\
-            \n\
-            Examples:\n\
-            - /gin-gonic/gin\n\
-            - /rust-lang/mdBook\n"
-        ).into_response()
-    }
-}
-
-pub async fn serve(addr: SocketAddr) -> Result<()> {
-    // Configure rate limiting: 10 requests per minute per IP
-    let governor_conf = Box::new(
-        GovernorConfigBuilder::default()
-            .per_minute(10)
-            .burst_size(5)
-            .key_extractor(SmartIpKeyExtractor)
-            .finish()
-            .unwrap(),
-    );
-
-    let app = Router::new()
-        .route("/", get(index))
+    let mut router = Router::new()
+        // API routes first - specific paths
         .route("/health", get(health))
-        .nest_service("/static", ServeDir::new("../frontend/dist"))
-        .route("/*path", get(handle_request))
-        .layer(
-            ServiceBuilder::new()
-                .layer(GovernorLayer {
-                    config: governor_conf,
-                })
-                .layer(CorsLayer::permissive())
-                .layer(CompressionLayer::new())
+        .route("/api/ingest", post(ingest_repository))
+        .route("/api/result/:id", get(get_result))
+        .route("/api/download/:id", get(download_content))
+        
+        // GitHub-like routes - exact structure match
+        .route("/:owner/:repo", get(handle_repo))
+        .route("/:owner/:repo/tree/:branch", get(handle_repo_branch))
+        .route("/:owner/:repo/tree/:branch/*path", get(handle_repo_path))
+        .with_state(state);
+
+    // Optional rate limiting
+    if std::env::var("ENABLE_RATE_LIMIT").is_ok() {
+        let governor_conf = Arc::new(
+            GovernorConfigBuilder::default()
+                .key_extractor(SmartIpKeyExtractor)
+                .burst_size(10)
+                .per_second(1)
+                .finish()
+                .unwrap()
         );
+        
+        router = router.layer(GovernorLayer {
+            config: governor_conf,
+        });
+    }
 
+    router.layer(
+        ServiceBuilder::new()
+            .layer(CorsLayer::permissive())
+            .layer(CompressionLayer::new())
+    )
+}
+
+// Add serve function for main.rs
+pub async fn serve(addr: std::net::SocketAddr) -> anyhow::Result<()> {
+    let app = create_router();
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    println!("HTTP server listening on {}", addr);
     axum::serve(listener, app).await?;
-
     Ok(())
 }

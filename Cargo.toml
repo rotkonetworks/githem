@@ -28,7 +28,7 @@ atty = "0.2.14"
 futures = "0.3"
 html-escape = "0.2"
 url = "2.5"
-tower-governor = "0.4"
+tower_governor = "0.4"
 
 [profile.release]
 opt-level = 3
