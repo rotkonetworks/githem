@@ -8,15 +8,20 @@ use axum::{
     Router,
 };
 use githem_core::{IngestOptions, Ingester};
+use html_escape::encode_text;
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
 use tower::ServiceBuilder;
+use tower_governor::{
+    governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer,
+};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
+use url::Url;
 
 const CLONE_TIMEOUT: Duration = Duration::from_secs(300);
 const INGEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -38,23 +43,78 @@ fn default_max_size() -> usize {
     1048576
 }
 
+fn validate_github_url(url: &str) -> Result<()> {
+    let parsed = Url::parse(url)
+        .map_err(|_| anyhow::anyhow!("Invalid URL format"))?;
+    
+    // Only allow github.com
+    if parsed.host_str() != Some("github.com") {
+        anyhow::bail!("Only github.com repositories are allowed");
+    }
+    
+    // Only allow HTTPS
+    if parsed.scheme() != "https" {
+        anyhow::bail!("Only HTTPS URLs are allowed");
+    }
+    
+    // Prevent private networks by checking for localhost/private IPs
+    if let Some(host) = parsed.host_str() {
+        if host.starts_with("127.") || host == "localhost" || 
+           host.starts_with("10.") || host.starts_with("192.168.") ||
+           host.starts_with("172.") {
+            anyhow::bail!("Private/internal URLs are not allowed");
+        }
+    }
+    
+    Ok(())
+}
+
+fn validate_subpath(subpath: &str) -> Result<String> {
+    // Prevent path traversal attacks
+    if subpath.contains("..") || subpath.contains("//") || subpath.contains("\\") {
+        anyhow::bail!("Invalid path: path traversal not allowed");
+    }
+    
+    // Additional security: only allow safe characters
+    if subpath.chars().any(|c| !c.is_ascii() || c.is_control()) {
+        anyhow::bail!("Invalid path: non-ASCII or control characters not allowed");
+    }
+    
+    // Canonicalize path by filtering out dangerous components
+    let path = std::path::Path::new(subpath)
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+        
+    Ok(path)
+}
+
 struct AppError(anyhow::Error);
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let msg = format!("{}", self.0);
-        let status = if msg.contains("authentication") {
-            StatusCode::UNAUTHORIZED
-        } else if msg.contains("not found") || msg.contains("Repository") {
-            StatusCode::NOT_FOUND
-        } else if msg.contains("timeout") {
-            StatusCode::REQUEST_TIMEOUT
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
+        warn!(error = %self.0, "Request failed");
+        
+        // Sanitize error messages for external users - don't expose internal details
+        let (status, user_msg) = match self.0.to_string() {
+            msg if msg.contains("authentication") => (StatusCode::UNAUTHORIZED, "Authentication required"),
+            msg if msg.contains("not found") || msg.contains("Repository") => (StatusCode::NOT_FOUND, "Repository not found"),
+            msg if msg.contains("timeout") => (StatusCode::REQUEST_TIMEOUT, "Request timed out"),
+            msg if msg.contains("Only github.com repositories") => (StatusCode::BAD_REQUEST, "Only GitHub repositories are supported"),
+            msg if msg.contains("Only HTTPS URLs") => (StatusCode::BAD_REQUEST, "Only HTTPS URLs are supported"),
+            msg if msg.contains("Private/internal URLs") => (StatusCode::BAD_REQUEST, "Private/internal URLs are not allowed"),
+            msg if msg.contains("path traversal") => (StatusCode::BAD_REQUEST, "Invalid path"),
+            msg if msg.contains("Invalid path") => (StatusCode::BAD_REQUEST, "Invalid path"),
+            msg if msg.contains("Invalid URL format") => (StatusCode::BAD_REQUEST, "Invalid URL format"),
+            msg if msg.contains("Repository too large") => (StatusCode::PAYLOAD_TOO_LARGE, "Repository too large"),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
         };
 
-        warn!(error = %self.0, status = %status, "Request failed");
-        (status, msg).into_response()
+        (status, user_msg).into_response()
     }
 }
 
@@ -93,7 +153,8 @@ fn parse_github_path(path: &str) -> Result<(String, Option<String>, Option<Strin
             "tree" | "blob" if parts.len() > 3 => {
                 branch = Some(parts[3].to_string());
                 if parts.len() > 4 {
-                    subpath = Some(parts[4..].join("/"));
+                    let raw_subpath = parts[4..].join("/");
+                    subpath = Some(validate_subpath(&raw_subpath)?);
                 }
             }
             _ => {}
@@ -101,6 +162,10 @@ fn parse_github_path(path: &str) -> Result<(String, Option<String>, Option<Strin
     }
 
     let repo_url = format!("https://github.com/{}/{}", owner, repo);
+    
+    // Validate the URL for SSRF protection
+    validate_github_url(&repo_url)?;
+    
     Ok((repo_url, branch, subpath))
 }
 
@@ -114,6 +179,10 @@ async fn handle_request(
 
     // If browser and no raw param, serve the frontend
     if is_browser(&headers) && !params.raw {
+        let escaped_path = encode_text(&path);
+        let ws_url = std::env::var("WS_URL").unwrap_or_else(|_| "ws://localhost:3001".to_string());
+        let escaped_ws_url = encode_text(&ws_url);
+        
         return Ok(Html(format!(
             r#"<!DOCTYPE html>
 <html>
@@ -126,12 +195,12 @@ async fn handle_request(
     <div id="app" data-path="{}"></div>
     <script type="module">
         window.__INITIAL_PATH__ = "{}";
-        window.__WS_URL__ = "ws://localhost:3001";
+        window.__WS_URL__ = "{}";
     </script>
     <script src="/static/app.js"></script>
 </body>
 </html>"#,
-            path, path, path
+            escaped_path, escaped_path, escaped_path, escaped_ws_url
         )).into_response());
     }
 
@@ -229,18 +298,21 @@ async fn health() -> &'static str {
 
 async fn index(headers: HeaderMap) -> impl IntoResponse {
     if is_browser(&headers) {
-        Html(r#"<!DOCTYPE html>
+        let ws_url = std::env::var("WS_URL").unwrap_or_else(|_| "ws://localhost:3001".to_string());
+        let escaped_ws_url = encode_text(&ws_url);
+        
+        Html(format!(r#"<!DOCTYPE html>
 <html>
 <head>
     <title>githem</title>
     <meta charset="utf-8">
-    <script>window.__WS_URL__ = "ws://localhost:3001";</script>
+    <script>window.__WS_URL__ = "{}";</script>
 </head>
 <body>
     <div id="app"></div>
     <script src="/static/app.js"></script>
 </body>
-</html>"#).into_response()
+</html>"#, escaped_ws_url)).into_response()
     } else {
         (
             StatusCode::OK,
@@ -264,6 +336,16 @@ async fn index(headers: HeaderMap) -> impl IntoResponse {
 }
 
 pub async fn serve(addr: SocketAddr) -> Result<()> {
+    // Configure rate limiting: 10 requests per minute per IP
+    let governor_conf = Box::new(
+        GovernorConfigBuilder::default()
+            .per_minute(10)
+            .burst_size(5)
+            .key_extractor(SmartIpKeyExtractor)
+            .finish()
+            .unwrap(),
+    );
+
     let app = Router::new()
         .route("/", get(index))
         .route("/health", get(health))
@@ -271,6 +353,9 @@ pub async fn serve(addr: SocketAddr) -> Result<()> {
         .route("/*path", get(handle_request))
         .layer(
             ServiceBuilder::new()
+                .layer(GovernorLayer {
+                    config: governor_conf,
+                })
                 .layer(CorsLayer::permissive())
                 .layer(CompressionLayer::new())
         );
