@@ -110,7 +110,7 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
             let _ = socket
                 .send(Message::Text(
                     serde_json::to_string(&WsMessage::Error {
-                        message: format!("Failed to clone: {}", e),
+                        message: format!("Failed to clone: {e}"),
                     })
                     .unwrap()
                     .into(),
@@ -143,7 +143,7 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
         let _ = socket
             .send(Message::Text(
                 serde_json::to_string(&WsMessage::Error {
-                    message: format!("Ingestion failed: {}", e),
+                    message: format!("Ingestion failed: {e}"),
                 })
                 .unwrap()
                 .into(),

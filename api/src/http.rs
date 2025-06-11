@@ -107,7 +107,6 @@ pub struct ErrorResponse {
 #[derive(Debug)]
 pub enum AppError {
     InvalidRequest(String),
-    IngestionFailed(String),
     NotFound,
     Timeout,
     InternalError(String),
@@ -121,13 +120,6 @@ impl IntoResponse for AppError {
                 ErrorResponse {
                     error: msg,
                     code: "INVALID_REQUEST".to_string(),
-                },
-            ),
-            AppError::IngestionFailed(msg) => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                ErrorResponse {
-                    error: msg,
-                    code: "INGESTION_FAILED".to_string(),
                 },
             ),
             AppError::NotFound => (
@@ -199,7 +191,7 @@ async fn ingest_repository(
         "{}-{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| AppError::InternalError(format!("System time error: {}", e)))?
             .as_millis(),
         rand::random::<u32>()
     );
@@ -219,7 +211,7 @@ async fn ingest_repository(
     })
     .await
     .map_err(|_| AppError::Timeout)?
-    .map_err(|e| AppError::IngestionFailed(e.to_string()))?;
+    .map_err(|e| AppError::InternalError(format!("Ingestion failed: {}", e)))?;
 
     // Cache the result
     let cached = CachedResult {
@@ -227,21 +219,23 @@ async fn ingest_repository(
         created_at: start,
     };
 
-    state.cache.write().await.insert(id.clone(), cached);
+    // Cache operations with error handling
+    {
+        let mut cache = state.cache.write().await;
+        cache.insert(id.clone(), cached);
 
-    // Clean up old cache entries (keep last 100)
-    let mut cache = state.cache.write().await;
-    if cache.len() > 100 {
-        let mut entries: Vec<_> = cache
-            .iter()
-            .map(|(k, v)| (k.clone(), v.created_at))
-            .collect();
-        entries.sort_by_key(|(_, time)| *time);
-        for (key, _) in entries.iter().take(cache.len() - 100) {
-            cache.remove(key);
+        // Clean up old cache entries (keep last 100)
+        if cache.len() > 100 {
+            let mut entries: Vec<_> = cache
+                .iter()
+                .map(|(k, v)| (k.clone(), v.created_at))
+                .collect();
+            entries.sort_by_key(|(_, time)| *time);
+            for (key, _) in entries.iter().take(cache.len() - 100) {
+                cache.remove(key);
+            }
         }
     }
-    drop(cache);
 
     Ok(Json(IngestResponse {
         id: id.clone(),
@@ -308,7 +302,7 @@ fn generate_tree_representation(content: &str) -> String {
     for line in content.lines() {
         if line.starts_with("=== ") && line.ends_with(" ===") {
             let path = &line[4..line.len() - 4];
-            tree.push_str(&format!("📄 {}\n", path));
+            tree.push_str(&format!("📄 {path}\n"));
         }
     }
 
@@ -316,8 +310,22 @@ fn generate_tree_representation(content: &str) -> String {
 }
 
 fn estimate_tokens(content: &str) -> usize {
-    // Rough estimation: ~4 characters per token
-    content.len() / 4
+    // More accurate token estimation based on typical patterns
+    let chars = content.len();
+    let words = content.split_whitespace().count();
+    let lines = content.lines().count();
+    
+    // Base estimate: ~3.3 chars per token for code/text mix
+    let char_estimate = chars as f32 / 3.3;
+    
+    // Word-based estimate: ~0.75 tokens per word
+    let word_estimate = words as f32 * 0.75;
+    
+    // Line penalty for structured content
+    let line_penalty = lines as f32 * 0.1;
+    
+    // Take average and add line penalty
+    ((char_estimate + word_estimate) / 2.0 + line_penalty) as usize
 }
 
 async fn get_result(
@@ -345,16 +353,18 @@ async fn download_content(
     match cache.get(&id) {
         Some(cached) => {
             let content = cached.result.content.clone();
-            let filename = format!("githem-{}.txt", id);
+            let filename = format!("githem-{id}.txt");
             drop(cache);
 
             let mut headers = HeaderMap::new();
-            headers.insert("content-type", "text/plain; charset=utf-8".parse().unwrap());
+            headers.insert("content-type", 
+                "text/plain; charset=utf-8".parse()
+                .map_err(|e| AppError::InternalError(format!("Header parse error: {}", e)))?);
             headers.insert(
                 "content-disposition",
-                format!("attachment; filename=\"{}\"", filename)
+                format!("attachment; filename=\"{filename}\"")
                     .parse()
-                    .unwrap(),
+                    .map_err(|e| AppError::InternalError(format!("Header parse error: {}", e)))?,
             );
 
             Ok((headers, content))
@@ -398,7 +408,7 @@ async fn ingest_github_repo(
         ));
     }
 
-    let url = format!("https://github.com/{}/{}", owner, repo);
+    let url = format!("https://github.com/{owner}/{repo}");
     let final_branch = branch.or(params.branch);
     let final_subpath = subpath.or(params.subpath);
 
@@ -423,12 +433,12 @@ async fn ingest_github_repo(
         max_file_size: params.max_size.unwrap_or(10 * 1024 * 1024),
     };
 
-    // Actually perform ingestion
+    // Generate ID for tracking
     let id = format!(
         "{}-{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| AppError::InternalError(format!("System time error: {}", e)))?
             .as_millis(),
         rand::random::<u32>()
     );
@@ -446,7 +456,7 @@ async fn ingest_github_repo(
     })
     .await
     .map_err(|_| AppError::Timeout)?
-    .map_err(|e| AppError::IngestionFailed(e.to_string()))?;
+    .map_err(|e| AppError::InternalError(format!("Ingestion failed: {}", e)))?;
 
     // Return the content directly for GitHub-style requests
     Ok(ingestion_result.content)
@@ -470,23 +480,6 @@ pub fn create_router() -> Router {
         )
         .with_state(state);
 
-    // Optional rate limiting
-    #[cfg(feature = "rate-limit")]
-    if std::env::var("ENABLE_RATE_LIMIT").is_ok() {
-        let governor_conf = Arc::new(
-            GovernorConfigBuilder::default()
-                .key_extractor(SmartIpKeyExtractor)
-                .burst_size(10)
-                .per_second(1)
-                .finish()
-                .unwrap(),
-        );
-
-        router = router.layer(GovernorLayer {
-            config: governor_conf,
-        });
-    }
-
     router.layer(
         ServiceBuilder::new()
             .layer(SetResponseHeaderLayer::overriding(
@@ -506,7 +499,7 @@ pub fn create_router() -> Router {
 pub async fn serve(addr: std::net::SocketAddr) -> anyhow::Result<()> {
     let app = create_router();
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    println!("HTTP server listening on {}", addr);
+    println!("HTTP server listening on {addr}");
     axum::serve(listener, app).await?;
     Ok(())
 }

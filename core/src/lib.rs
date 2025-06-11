@@ -92,8 +92,8 @@ impl Ingester {
             let tree = head.peel_to_tree()?;
 
             tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
-                if entry.kind() == Some(git2::ObjectType::Blob) {
-                    if let Some(name) = entry.name() {
+                if entry.kind() == Some(git2::ObjectType::Blob)
+                    && let Some(name) = entry.name() {
                         let path = if dir.is_empty() {
                             PathBuf::from(name)
                         } else {
@@ -101,7 +101,6 @@ impl Ingester {
                         };
                         files.push(path);
                     }
-                }
                 git2::TreeWalkResult::Ok
             })?;
         }
@@ -114,11 +113,10 @@ impl Ingester {
             let statuses = self.repo.statuses(Some(&mut status_opts))?;
 
             for status in statuses.iter() {
-                if status.status().contains(Status::WT_NEW) {
-                    if let Some(path) = status.path() {
+                if status.status().contains(Status::WT_NEW)
+                    && let Some(path) = status.path() {
                         files.push(PathBuf::from(path));
                     }
-                }
             }
         }
 
@@ -158,7 +156,7 @@ impl Ingester {
         let content = std::fs::read_to_string(path).unwrap_or_else(|_| "[Binary file]".to_string());
 
         writeln!(output, "=== {} ===", relative.display())?;
-        writeln!(output, "{}", content)?;
+        writeln!(output, "{content}")?;
         writeln!(output)?;
 
         Ok(())
@@ -181,7 +179,7 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    let path = std::env::temp_dir().join(format!("githem-{}", temp_id));
+    let path = std::env::temp_dir().join(format!("githem-{temp_id}"));
 
     let mut fetch_opts = git2::FetchOptions::new();
 
@@ -199,7 +197,7 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
             let key_names = ["id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"];
             for key_name in &key_names {
                 let private_key = ssh_dir.join(key_name);
-                let public_key = ssh_dir.join(format!("{}.pub", key_name));
+                let public_key = ssh_dir.join(format!("{key_name}.pub"));
 
                 if private_key.exists() {
                     return git2::Cred::ssh_key(
@@ -275,8 +273,7 @@ fn glob_match(pattern: &str, path: &str) -> bool {
         return path.ends_with(&pattern[1..]);
     }
 
-    if pattern.ends_with("/*") {
-        let prefix = &pattern[..pattern.len() - 2];
+    if let Some(prefix) = pattern.strip_suffix("/*") {
         return path.starts_with(prefix) && path.len() > prefix.len();
     }
 
@@ -287,7 +284,7 @@ fn glob_match(pattern: &str, path: &str) -> bool {
         }
     }
 
-    path == pattern || path.starts_with(&format!("{}/", pattern))
+    path == pattern || path.starts_with(&format!("{pattern}/"))
 }
 
 #[cfg(test)]
