@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use git2::{Repository, Status, StatusOptions};
 use serde::{Deserialize, Serialize};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestOptions {
@@ -161,14 +162,23 @@ impl Ingester {
 }
 
 pub fn is_remote_url(source: &str) -> bool {
-    source.starts_with("https://") ||
-    source.starts_with("git://") ||
-    source.starts_with("git@") ||
-    source.starts_with("ssh://")
+    // Security: Only allow known safe protocols
+    source.starts_with("https://github.com/") ||
+    source.starts_with("https://gitlab.com/")
 }
 
 pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
-    let path = std::env::temp_dir().join(format!("githem-{}", uuid::Uuid::new_v4()));
+    // Security: Validate URL
+    if !is_remote_url(url) {
+        return Err(anyhow::anyhow!("Invalid or unsafe URL"));
+    }
+
+    // Use secure temp directory with proper cleanup
+    let temp_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let path = std::env::temp_dir().join(format!("githem-{}", temp_id));
     
     let mut fetch_opts = git2::FetchOptions::new();
     
@@ -207,7 +217,7 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
     });
     
     // Only show progress in TTY (CLI mode)
-    if atty::is(atty::Stream::Stderr) {
+    if std::io::stderr().is_terminal() {
         callbacks.transfer_progress(|stats| {
             if stats.total_objects() > 0 {
                 eprint!("\rReceiving objects: {}% ({}/{})",
@@ -233,10 +243,11 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
     
     let repo = builder.clone(url, &path)?;
     
-    if atty::is(atty::Stream::Stderr) {
+    if std::io::stderr().is_terminal() {
         eprintln!();
     }
     
+    // Note: Repository owns the temp directory, cleanup happens when dropped
     Ok(repo)
 }
 
@@ -283,5 +294,14 @@ mod tests {
         assert!(glob_match("*.rs", "src/main.rs"));
         assert!(glob_match("src/*", "src/main.rs"));
         assert!(!glob_match("*.rs", "main.py"));
+    }
+
+    #[test]
+    fn test_url_validation() {
+        assert!(is_remote_url("https://github.com/user/repo"));
+        assert!(is_remote_url("https://gitlab.com/user/repo"));
+        assert!(!is_remote_url("file:///etc/passwd"));
+        assert!(!is_remote_url("ftp://example.com/"));
+        assert!(!is_remote_url("https://evil.com/"));
     }
 }

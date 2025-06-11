@@ -9,6 +9,10 @@ license.workspace = true
 name = "githem-api"
 path = "src/main.rs"
 
+[features]
+default = []
+rate-limit = ["dep:tower_governor"]
+
 [dependencies]
 githem-core = { path = "../core" }
 anyhow = { workspace = true }
@@ -22,9 +26,8 @@ tracing-subscriber = { workspace = true }
 base64 = { workspace = true }
 html-escape = { workspace = true }
 url = { workspace = true }
-#axum = { workspace = true, features = ["ws"] }
-axum = { version = "0.7", features = ["ws"] }
-tower_governor = "0.4"
-uuid = "1"
-fastrand = "2.3"
-rand = "0.8"
+axum = { workspace = true }
+rand = { workspace = true }
+
+# Optional rate limiting
+tower_governor = { version = "0.4", optional = true }

@@ -19,7 +19,7 @@ async fn main() -> Result<()> {
     let http_port = std::env::var("HTTP_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(3000);
+        .unwrap_or(42069);
     
     let http_addr = SocketAddr::from(([0, 0, 0, 0], http_port));
     
@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
     let ws_port = std::env::var("WS_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(3001);
+        .unwrap_or(42070);
     
     let ws_addr = SocketAddr::from(([0, 0, 0, 0], ws_port));
 

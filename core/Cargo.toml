@@ -10,4 +10,3 @@ anyhow = { workspace = true }
 git2 = { workspace = true }
 uuid = { workspace = true }
 serde = { workspace = true }
-atty = { workspace = true }

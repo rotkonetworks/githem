@@ -13,17 +13,22 @@ use githem_core::{IngestOptions, Ingester, is_remote_url};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use tower::ServiceBuilder;
-use tower_governor::{
-    governor::GovernorConfigBuilder, 
-    key_extractor::SmartIpKeyExtractor,
-    GovernorLayer,
-};
+use std::io::IsTerminal;
 use tower_http::{
     compression::CompressionLayer,
     cors::CorsLayer,
+    set_header::SetResponseHeaderLayer,
 };
 
 const INGEST_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
+
+fn validate_github_name(name: &str) -> bool {
+    !name.is_empty() 
+    && name.len() <= 39
+    && name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    && !name.starts_with(['-', '.'])
+    && !name.ends_with(['-', '.'])
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -375,6 +380,11 @@ async fn ingest_github_repo(
     subpath: Option<String>,
     params: QueryParams,
 ) -> Result<impl IntoResponse, AppError> {
+    // Validate input
+    if !validate_github_name(&owner) || !validate_github_name(&repo) {
+        return Err(AppError::InvalidRequest("Invalid owner or repo name".to_string()));
+    }
+
     let url = format!("https://github.com/{}/{}", owner, repo);
     let final_branch = branch.or(params.branch);
     let final_subpath = subpath.or(params.subpath);
@@ -399,8 +409,6 @@ async fn ingest_github_repo(
     };
 
     // Actually perform ingestion
-    let start = Instant::now();
-    
     let id = format!("{}-{}", 
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(),
         rand::random::<u32>()
@@ -428,20 +436,21 @@ async fn ingest_github_repo(
 pub fn create_router() -> Router {
     let state = AppState::new();
 
-    let mut router = Router::new()
+    let router = Router::new()
         // API routes first - specific paths
         .route("/health", get(health))
         .route("/api/ingest", post(ingest_repository))
-        .route("/api/result/:id", get(get_result))
-        .route("/api/download/:id", get(download_content))
-        
+        .route("/api/result/{id}", get(get_result))
+        .route("/api/download/{id}", get(download_content))
+
         // GitHub-like routes - exact structure match
-        .route("/:owner/:repo", get(handle_repo))
-        .route("/:owner/:repo/tree/:branch", get(handle_repo_branch))
-        .route("/:owner/:repo/tree/:branch/*path", get(handle_repo_path))
+        .route("/{owner}/{repo}", get(handle_repo))
+        .route("/{owner}/{repo}/tree/{branch}", get(handle_repo_branch))
+        .route("/{owner}/{repo}/tree/{branch}/{*path}", get(handle_repo_path))
         .with_state(state);
 
     // Optional rate limiting
+    #[cfg(feature = "rate-limit")]
     if std::env::var("ENABLE_RATE_LIMIT").is_ok() {
         let governor_conf = Arc::new(
             GovernorConfigBuilder::default()
@@ -459,6 +468,14 @@ pub fn create_router() -> Router {
 
     router.layer(
         ServiceBuilder::new()
+            .layer(SetResponseHeaderLayer::overriding(
+                axum::http::header::X_FRAME_OPTIONS,
+                axum::http::HeaderValue::from_static("DENY"),
+            ))
+            .layer(SetResponseHeaderLayer::overriding(
+                axum::http::header::X_CONTENT_TYPE_OPTIONS,
+                axum::http::HeaderValue::from_static("nosniff"),
+            ))
             .layer(CorsLayer::permissive())
             .layer(CompressionLayer::new())
     )
