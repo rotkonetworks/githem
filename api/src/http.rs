@@ -13,7 +13,6 @@ use githem_core::{IngestOptions, Ingester, is_remote_url};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use tower::ServiceBuilder;
-use std::io::IsTerminal;
 use tower_http::{
     compression::CompressionLayer,
     cors::CorsLayer,
