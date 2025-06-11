@@ -37,8 +37,7 @@ impl Ingester {
     }
 
     pub fn from_path(path: &Path, options: IngestOptions) -> Result<Self> {
-        let repo = Repository::open(path)
-            .context("Failed to open repository")?;
+        let repo = Repository::open(path).context("Failed to open repository")?;
         Ok(Self::new(repo, options))
     }
 
@@ -67,14 +66,20 @@ impl Ingester {
         }
 
         if !self.options.include_patterns.is_empty() {
-            return Ok(self.options.include_patterns.iter().any(|p| glob_match(p, &path_str)));
+            return Ok(self
+                .options
+                .include_patterns
+                .iter()
+                .any(|p| glob_match(p, &path_str)));
         }
 
         Ok(true)
     }
 
     pub fn ingest<W: Write>(&self, output: &mut W) -> Result<()> {
-        let workdir = self.repo.workdir()
+        let workdir = self
+            .repo
+            .workdir()
             .context("Repository has no working directory")?;
 
         let head_result = self.repo.head();
@@ -150,8 +155,7 @@ impl Ingester {
             return Ok(());
         }
 
-        let content = std::fs::read_to_string(path)
-            .unwrap_or_else(|_| "[Binary file]".to_string());
+        let content = std::fs::read_to_string(path).unwrap_or_else(|_| "[Binary file]".to_string());
 
         writeln!(output, "=== {} ===", relative.display())?;
         writeln!(output, "{}", content)?;
@@ -163,8 +167,7 @@ impl Ingester {
 
 pub fn is_remote_url(source: &str) -> bool {
     // Security: Only allow known safe protocols
-    source.starts_with("https://github.com/") ||
-    source.starts_with("https://gitlab.com/")
+    source.starts_with("https://github.com/") || source.starts_with("https://gitlab.com/")
 }
 
 pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
@@ -179,9 +182,9 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
         .unwrap()
         .as_millis();
     let path = std::env::temp_dir().join(format!("githem-{}", temp_id));
-    
+
     let mut fetch_opts = git2::FetchOptions::new();
-    
+
     // Configure SSH authentication
     let mut callbacks = git2::RemoteCallbacks::new();
     callbacks.credentials(|_url, username_from_url, allowed_types| {
@@ -189,15 +192,15 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
             if let Ok(cred) = git2::Cred::ssh_key_from_agent(username_from_url.unwrap_or("git")) {
                 return Ok(cred);
             }
-            
+
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
             let ssh_dir = Path::new(&home).join(".ssh");
-            
+
             let key_names = ["id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"];
             for key_name in &key_names {
                 let private_key = ssh_dir.join(key_name);
                 let public_key = ssh_dir.join(format!("{}.pub", key_name));
-                
+
                 if private_key.exists() {
                     return git2::Cred::ssh_key(
                         username_from_url.unwrap_or("git"),
@@ -208,19 +211,22 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
                 }
             }
         }
-        
+
         if allowed_types.contains(git2::CredentialType::DEFAULT) {
             return git2::Cred::default();
         }
-        
-        Err(git2::Error::from_str("no valid authentication method found"))
+
+        Err(git2::Error::from_str(
+            "no valid authentication method found",
+        ))
     });
-    
+
     // Only show progress in TTY (CLI mode)
     if std::io::stderr().is_terminal() {
         callbacks.transfer_progress(|stats| {
             if stats.total_objects() > 0 {
-                eprint!("\rReceiving objects: {}% ({}/{})",
+                eprint!(
+                    "\rReceiving objects: {}% ({}/{})",
                     (100 * stats.received_objects()) / stats.total_objects(),
                     stats.received_objects(),
                     stats.total_objects()
@@ -229,38 +235,38 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
             true
         });
     }
-    
+
     fetch_opts.remote_callbacks(callbacks);
     fetch_opts.depth(1);
     fetch_opts.download_tags(git2::AutotagOption::None);
-    
+
     let mut builder = git2::build::RepoBuilder::new();
     builder.fetch_options(fetch_opts);
-    
+
     if let Some(branch) = branch {
         builder.branch(branch);
     }
-    
+
     let repo = builder.clone(url, &path)?;
-    
+
     if std::io::stderr().is_terminal() {
         eprintln!();
     }
-    
+
     // Note: Repository owns the temp directory, cleanup happens when dropped
     Ok(repo)
 }
 
 pub fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {
     let (object, reference) = repo.revparse_ext(branch_name)?;
-    
+
     repo.checkout_tree(&object, None)?;
-    
+
     match reference {
         Some(gref) => repo.set_head(gref.name().unwrap())?,
         None => repo.set_head_detached(object.id())?,
     }
-    
+
     Ok(())
 }
 
@@ -268,26 +274,26 @@ fn glob_match(pattern: &str, path: &str) -> bool {
     if pattern.starts_with("*.") {
         return path.ends_with(&pattern[1..]);
     }
-    
+
     if pattern.ends_with("/*") {
         let prefix = &pattern[..pattern.len() - 2];
         return path.starts_with(prefix) && path.len() > prefix.len();
     }
-    
+
     if pattern.contains('*') {
         let parts: Vec<&str> = pattern.split('*').collect();
         if parts.len() == 2 {
             return path.starts_with(parts[0]) && path.ends_with(parts[1]);
         }
     }
-    
+
     path == pattern || path.starts_with(&format!("{}/", pattern))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_glob_match() {
         assert!(glob_match("*.rs", "main.rs"));

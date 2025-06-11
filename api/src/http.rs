@@ -3,30 +3,30 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::{
+    Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
-    Router,
 };
 use githem_core::{IngestOptions, Ingester, is_remote_url};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use tower::ServiceBuilder;
 use tower_http::{
-    compression::CompressionLayer,
-    cors::CorsLayer,
-    set_header::SetResponseHeaderLayer,
+    compression::CompressionLayer, cors::CorsLayer, set_header::SetResponseHeaderLayer,
 };
 
 const INGEST_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 
 fn validate_github_name(name: &str) -> bool {
-    !name.is_empty() 
-    && name.len() <= 39
-    && name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
-    && !name.starts_with(['-', '.'])
-    && !name.ends_with(['-', '.'])
+    !name.is_empty()
+        && name.len() <= 39
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+        && !name.starts_with(['-', '.'])
+        && !name.ends_with(['-', '.'])
 }
 
 #[derive(Clone)]
@@ -171,7 +171,7 @@ async fn health() -> impl IntoResponse {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    
+
     Json(serde_json::json!({
         "status": "ok",
         "timestamp": timestamp,
@@ -184,7 +184,7 @@ async fn ingest_repository(
     Json(request): Json<IngestRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let start = Instant::now();
-    
+
     // Validate request
     if request.url.is_empty() {
         return Err(AppError::InvalidRequest("URL is required".to_string()));
@@ -195,8 +195,12 @@ async fn ingest_repository(
     }
 
     // Generate unique ID for this ingestion
-    let id = format!("{}-{}", 
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(),
+    let id = format!(
+        "{}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
         rand::random::<u32>()
     );
 
@@ -222,13 +226,16 @@ async fn ingest_repository(
         result: ingestion_result.clone(),
         created_at: start,
     };
-    
+
     state.cache.write().await.insert(id.clone(), cached);
 
     // Clean up old cache entries (keep last 100)
     let mut cache = state.cache.write().await;
     if cache.len() > 100 {
-        let mut entries: Vec<_> = cache.iter().map(|(k, v)| (k.clone(), v.created_at)).collect();
+        let mut entries: Vec<_> = cache
+            .iter()
+            .map(|(k, v)| (k.clone(), v.created_at))
+            .collect();
         entries.sort_by_key(|(_, time)| *time);
         for (key, _) in entries.iter().take(cache.len() - 100) {
             cache.remove(key);
@@ -297,14 +304,14 @@ async fn perform_ingestion(
 fn generate_tree_representation(content: &str) -> String {
     let mut tree = String::new();
     tree.push_str("Repository structure:\n");
-    
+
     for line in content.lines() {
         if line.starts_with("=== ") && line.ends_with(" ===") {
-            let path = &line[4..line.len()-4];
+            let path = &line[4..line.len() - 4];
             tree.push_str(&format!("📄 {}\n", path));
         }
     }
-    
+
     tree
 }
 
@@ -318,13 +325,13 @@ async fn get_result(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let cache = state.cache.read().await;
-    
+
     match cache.get(&id) {
         Some(cached) => {
             let result = cached.result.clone();
             drop(cache);
             Ok(Json(result))
-        },
+        }
         None => Err(AppError::NotFound),
     }
 }
@@ -334,19 +341,24 @@ async fn download_content(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let cache = state.cache.read().await;
-    
+
     match cache.get(&id) {
         Some(cached) => {
             let content = cached.result.content.clone();
             let filename = format!("githem-{}.txt", id);
             drop(cache);
-            
+
             let mut headers = HeaderMap::new();
             headers.insert("content-type", "text/plain; charset=utf-8".parse().unwrap());
-            headers.insert("content-disposition", format!("attachment; filename=\"{}\"", filename).parse().unwrap());
-            
+            headers.insert(
+                "content-disposition",
+                format!("attachment; filename=\"{}\"", filename)
+                    .parse()
+                    .unwrap(),
+            );
+
             Ok((headers, content))
-        },
+        }
         None => Err(AppError::NotFound),
     }
 }
@@ -381,7 +393,9 @@ async fn ingest_github_repo(
 ) -> Result<impl IntoResponse, AppError> {
     // Validate input
     if !validate_github_name(&owner) || !validate_github_name(&repo) {
-        return Err(AppError::InvalidRequest("Invalid owner or repo name".to_string()));
+        return Err(AppError::InvalidRequest(
+            "Invalid owner or repo name".to_string(),
+        ));
     }
 
     let url = format!("https://github.com/{}/{}", owner, repo);
@@ -392,13 +406,15 @@ async fn ingest_github_repo(
         url,
         branch: final_branch.clone(),
         subpath: final_subpath,
-        include_patterns: params.include
+        include_patterns: params
+            .include
             .unwrap_or_default()
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect(),
-        exclude_patterns: params.exclude
+        exclude_patterns: params
+            .exclude
             .unwrap_or_default()
             .split(',')
             .map(|s| s.trim().to_string())
@@ -408,8 +424,12 @@ async fn ingest_github_repo(
     };
 
     // Actually perform ingestion
-    let id = format!("{}-{}", 
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(),
+    let id = format!(
+        "{}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
         rand::random::<u32>()
     );
 
@@ -441,11 +461,13 @@ pub fn create_router() -> Router {
         .route("/api/ingest", post(ingest_repository))
         .route("/api/result/{id}", get(get_result))
         .route("/api/download/{id}", get(download_content))
-
         // GitHub-like routes - exact structure match
         .route("/{owner}/{repo}", get(handle_repo))
         .route("/{owner}/{repo}/tree/{branch}", get(handle_repo_branch))
-        .route("/{owner}/{repo}/tree/{branch}/{*path}", get(handle_repo_path))
+        .route(
+            "/{owner}/{repo}/tree/{branch}/{*path}",
+            get(handle_repo_path),
+        )
         .with_state(state);
 
     // Optional rate limiting
@@ -457,9 +479,9 @@ pub fn create_router() -> Router {
                 .burst_size(10)
                 .per_second(1)
                 .finish()
-                .unwrap()
+                .unwrap(),
         );
-        
+
         router = router.layer(GovernorLayer {
             config: governor_conf,
         });
@@ -476,7 +498,7 @@ pub fn create_router() -> Router {
                 axum::http::HeaderValue::from_static("nosniff"),
             ))
             .layer(CorsLayer::permissive())
-            .layer(CompressionLayer::new())
+            .layer(CompressionLayer::new()),
     )
 }
 

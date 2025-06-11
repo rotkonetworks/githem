@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use githem_core::{IngestOptions, Ingester, is_remote_url, checkout_branch};
+use githem_core::{IngestOptions, Ingester, checkout_branch, is_remote_url};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -63,15 +63,15 @@ fn main() -> Result<()> {
             eprintln!("Use 'git init' to create a repository or specify a remote URL");
             std::process::exit(1);
         }
-        
+
         let ingester = Ingester::from_path(&path, options)?;
-        
+
         // Handle local branch checkout
         if let Some(branch) = &cli.branch {
             let repo = git2::Repository::open(&path)?;
             checkout_branch(&repo, branch)?;
         }
-        
+
         ingester
     };
 
