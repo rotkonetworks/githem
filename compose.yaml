@@ -1,0 +1,8 @@
+version: '3.8'
+services:
+  githem-api:
+    build: .
+    ports:
+      - "42069:42069"
+      - "42070:42070"
+    restart: unless-stopped
