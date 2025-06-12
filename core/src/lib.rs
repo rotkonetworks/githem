@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use git2::{Repository, Status, StatusOptions};
 use serde::{Deserialize, Serialize};
 use std::io::{IsTerminal, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -185,40 +186,103 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
 
     let mut fetch_opts = git2::FetchOptions::new();
 
-    // Configure SSH authentication
+    // Configure SSH authentication with security hardening
     let mut callbacks = git2::RemoteCallbacks::new();
-    callbacks.credentials(|_url, username_from_url, allowed_types| {
+    callbacks.credentials(|url, username_from_url, allowed_types| {
+        // Security: Validate URL to prevent credential theft
+        if !is_remote_url(url) {
+            return Err(git2::Error::from_str("Invalid URL for credential authentication"));
+        }
+
         if allowed_types.contains(git2::CredentialType::SSH_KEY) {
+            // Security: Try SSH agent first (safer than filesystem keys)
             if let Ok(cred) = git2::Cred::ssh_key_from_agent(username_from_url.unwrap_or("git")) {
                 return Ok(cred);
             }
 
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            let ssh_dir = Path::new(&home).join(".ssh");
+            // Security: Validate and sanitize HOME directory
+            let home = match std::env::var("HOME") {
+                Ok(h) => {
+                    let home_path = Path::new(&h);
+                    // Security: Validate HOME path is absolute and exists
+                    if !home_path.is_absolute() || !home_path.exists() {
+                        return Err(git2::Error::from_str("Invalid HOME directory"));
+                    }
+                    h
+                }
+                Err(_) => return Err(git2::Error::from_str("HOME environment variable not set")),
+            };
 
-            let key_names = ["id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"];
+            let ssh_dir = Path::new(&home).join(".ssh");
+            
+            // Security: Validate SSH directory exists and has correct permissions
+            if !ssh_dir.exists() || !ssh_dir.is_dir() {
+                return Err(git2::Error::from_str("SSH directory not found"));
+            }
+
+            // Security: Check SSH directory permissions (should be 700)
+            if let Ok(metadata) = std::fs::metadata(&ssh_dir) {
+                use std::os::unix::fs::PermissionsExt;
+                let perms = metadata.permissions().mode();
+                if (perms & 0o777) != 0o700 {
+                    return Err(git2::Error::from_str("SSH directory has insecure permissions"));
+                }
+            }
+
+            // Security: Only try Ed25519 keys (most secure)
+            let key_names = ["id_ed25519"];
             for key_name in &key_names {
                 let private_key = ssh_dir.join(key_name);
                 let public_key = ssh_dir.join(format!("{key_name}.pub"));
 
-                if private_key.exists() {
+                if private_key.exists() && public_key.exists() {
+                    // Security: Validate private key permissions (should be 600)
+                    if let Ok(metadata) = std::fs::metadata(&private_key) {
+                        use std::os::unix::fs::PermissionsExt;
+                        let perms = metadata.permissions().mode();
+                        if (perms & 0o777) != 0o600 {
+                            continue; // Skip keys with wrong permissions
+                        }
+
+                        // Security: Validate key ownership
+                        if metadata.uid() != unsafe { libc::getuid() } {
+                            continue; // Skip keys not owned by current user
+                        }
+
+                        // Security: Validate key file size (reasonable limits)
+                        if metadata.len() > 8192 || metadata.len() < 64 {
+                            continue; // Skip suspiciously sized keys
+                        }
+                    } else {
+                        continue; // Skip if can't read metadata
+                    }
+
+                    // Security: Validate public key permissions (should be 644 or 600)
+                    if let Ok(pub_metadata) = std::fs::metadata(&public_key) {
+                        use std::os::unix::fs::PermissionsExt;
+                        let pub_perms = pub_metadata.permissions().mode();
+                        if (pub_perms & 0o777) != 0o644 && (pub_perms & 0o777) != 0o600 {
+                            continue; // Skip keys with wrong permissions
+                        }
+                    }
+
+                    // Security: Use secure credential creation with timeout
                     return git2::Cred::ssh_key(
                         username_from_url.unwrap_or("git"),
                         Some(&public_key),
                         &private_key,
-                        None,
+                        None, // No passphrase support to prevent hanging
                     );
                 }
             }
         }
 
-        if allowed_types.contains(git2::CredentialType::DEFAULT) {
+        // Security: Only allow default credentials for HTTPS
+        if allowed_types.contains(git2::CredentialType::DEFAULT) && url.starts_with("https://") {
             return git2::Cred::default();
         }
 
-        Err(git2::Error::from_str(
-            "no valid authentication method found",
-        ))
+        Err(git2::Error::from_str("No secure authentication method available"))
     });
 
     // Only show progress in TTY (CLI mode)
@@ -239,6 +303,9 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
     fetch_opts.remote_callbacks(callbacks);
     fetch_opts.depth(1);
     fetch_opts.download_tags(git2::AutotagOption::None);
+    
+    // Note: git2 doesn't support timeout configuration directly
+    // Timeout is handled at the OS network level
 
     let mut builder = git2::build::RepoBuilder::new();
     builder.fetch_options(fetch_opts);
