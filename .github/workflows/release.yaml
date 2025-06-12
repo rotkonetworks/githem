@@ -45,22 +45,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-            # Use cross for ARM64 - it handles all the cross-compilation bullshit
-            cargo install cross --git https://github.com/cross-rs/cross
+            # Install pre-built cross
+            curl -L https://github.com/cross-rs/cross/releases/latest/download/cross-x86_64-unknown-linux-gnu.tar.gz | tar xz
+            sudo mv cross /usr/local/bin/
           fi
       
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install openssl pkg-config
-          echo "OPENSSL_DIR=$(brew --prefix openssl)" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$(brew --prefix openssl)/lib/pkgconfig" >> $GITHUB_ENV
+          brew install pkg-config
       
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
-        run: |
-          choco install openssl
-          echo "OPENSSL_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
+        run: echo "No additional dependencies needed"
       
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -90,7 +87,12 @@ jobs:
         run: cp target/${{ matrix.target }}/release/githem.exe ${{ matrix.name }}
       
       - name: Generate SHA512 hash
-        run: sha512sum ${{ matrix.name }} > ${{ matrix.name }}.sha512
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            shasum -a 512 ${{ matrix.name }} > ${{ matrix.name }}.sha512
+          else
+            sha512sum ${{ matrix.name }} > ${{ matrix.name }}.sha512
+          fi
         shell: bash
       
       - name: Upload Artifacts
@@ -126,9 +128,10 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config
+          sudo apt-get install -y pkg-config
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-            cargo install cross --git https://github.com/cross-rs/cross
+            curl -L https://github.com/cross-rs/cross/releases/latest/download/cross-x86_64-unknown-linux-gnu.tar.gz | tar xz
+            sudo mv cross /usr/local/bin/
           fi
       
       - name: Cache Cargo
