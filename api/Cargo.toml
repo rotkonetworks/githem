@@ -30,4 +30,4 @@ axum = { workspace = true }
 rand = { workspace = true }
 
 # Optional rate limiting
-tower_governor = { version = "0.4", optional = true }
+tower_governor = { version = "0.7", optional = true }

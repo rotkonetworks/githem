@@ -27,7 +27,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
 html-escape = "0.2"
 url = "2.5"
-rand = "0.8"
+rand = "0.9"
 
 [profile.release]
 opt-level = 3
