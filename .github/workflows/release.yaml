@@ -178,7 +178,7 @@ jobs:
           merge-multiple: true
       
       - name: Import GPG Key
-        run: echo "${{ secrets.HQ_ROTKO_PGP }}" | gpg --batch --import
+        run: echo "${{ secrets.HQ_ROTKO_GPG }}" | gpg --batch --import
       
       - name: Configure GPG
         run: |

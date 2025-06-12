@@ -537,6 +537,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "git2",
+ "libc",
  "serde",
  "uuid",
 ]
