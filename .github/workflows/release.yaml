@@ -167,46 +167,51 @@ jobs:
             ${{ matrix.name }}.sha512
 
   sign-and-release:
-    needs: [build-cli, build-server]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          merge-multiple: true
-      
-      - name: Import GPG Key
-        run: echo "${{ secrets.HQ_ROTKO_GPG }}" | gpg --batch --import
-      
-      - name: Configure GPG
-        run: |
-          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
-          gpg-connect-agent reloadagent /bye
-      
-      - name: Sign all binaries and hashes
-        run: |
-          for binary in githem-*; do
-            if [[ ! "$binary" =~ \.(sha512|sig)$ ]]; then
-              gpg --batch --yes --pinentry-mode loopback --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
-                --detach-sign --armor --default-key hq@rotko.net --output "${binary}.sig" "$binary"
-              
-              if [[ -f "${binary}.sha512" ]]; then
-                gpg --batch --yes --pinentry-mode loopback --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
-                  --detach-sign --armor --default-key hq@rotko.net --output "${binary}.sha512.sig" "${binary}.sha512"
-              fi
-            fi
-          done
-        env:
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-      
-      - name: Create Release
-        run: |
-          gh release create ${{ github.ref_name }} \
-            --title "Githem ${{ github.ref_name }}" \
-            --generate-notes \
-            githem-* \
-            *.sig
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  needs: [build-cli, build-server]
+  runs-on: ubuntu-latest
+  permissions:
+    contents: write
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: '0'
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        merge-multiple: true
+
+    - name: Import GPG Key
+      run: echo "${{ secrets.HQ_ROTKO_GPG }}" | gpg --batch --import
+
+    - name: Configure GPG
+      run: |
+        echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+        gpg-connect-agent reloadagent /bye
+
+    - name: Sign all binaries and hashes
+      run: |
+        for binary in githem-*; do
+        if [[ ! "$binary" =~ \.(sha512|sig)$ ]]; then
+        gpg --batch --yes --pinentry-mode loopback --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
+        --detach-sign --armor --default-key hq@rotko.net --output "${binary}.sig" "$binary"
+
+        if [[ -f "${binary}.sha512" ]]; then
+        gpg --batch --yes --pinentry-mode loopback --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
+        --detach-sign --armor --default-key hq@rotko.net --output "${binary}.sha512.sig" "${binary}.sha512"
+        fi
+        fi
+        done
+      env:
+        GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+    - name: Create Release
+      run: |
+        gh release create ${{ github.ref_name }} \
+        --title "Githem ${{ github.ref_name }}" \
+        --generate-notes \
+        githem-* \
+        *.sig
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
