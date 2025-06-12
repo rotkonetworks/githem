@@ -92,8 +92,8 @@ impl Ingester {
             let tree = head.peel_to_tree()?;
 
             tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
-                if entry.kind() == Some(git2::ObjectType::Blob)
-                    && let Some(name) = entry.name() {
+                if entry.kind() == Some(git2::ObjectType::Blob) {
+                    if let Some(name) = entry.name() {
                         let path = if dir.is_empty() {
                             PathBuf::from(name)
                         } else {
@@ -101,6 +101,7 @@ impl Ingester {
                         };
                         files.push(path);
                     }
+                }
                 git2::TreeWalkResult::Ok
             })?;
         }
@@ -113,10 +114,11 @@ impl Ingester {
             let statuses = self.repo.statuses(Some(&mut status_opts))?;
 
             for status in statuses.iter() {
-                if status.status().contains(Status::WT_NEW)
-                    && let Some(path) = status.path() {
+                if status.status().contains(Status::WT_NEW) {
+                    if let Some(path) = status.path() {
                         files.push(PathBuf::from(path));
                     }
+                }
             }
         }
 
