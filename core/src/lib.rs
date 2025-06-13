@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use git2::{Repository, Status, StatusOptions};
 use serde::{Deserialize, Serialize};
 use std::io::{IsTerminal, Write};
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -221,6 +222,7 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
             }
 
             // Security: Check SSH directory permissions (should be 700)
+            #[cfg(unix)]
             if let Ok(metadata) = std::fs::metadata(&ssh_dir) {
                 use std::os::unix::fs::PermissionsExt;
                 let perms = metadata.permissions().mode();
@@ -237,6 +239,7 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
 
                 if private_key.exists() && public_key.exists() {
                     // Security: Validate private key permissions (should be 600)
+                    #[cfg(unix)]
                     if let Ok(metadata) = std::fs::metadata(&private_key) {
                         use std::os::unix::fs::PermissionsExt;
                         let perms = metadata.permissions().mode();
@@ -258,6 +261,7 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
                     }
 
                     // Security: Validate public key permissions (should be 644 or 600)
+                    #[cfg(unix)]
                     if let Ok(pub_metadata) = std::fs::metadata(&public_key) {
                         use std::os::unix::fs::PermissionsExt;
                         let pub_perms = pub_metadata.permissions().mode();
