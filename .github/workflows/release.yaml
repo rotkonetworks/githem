@@ -208,10 +208,30 @@ jobs:
 
       - name: Create Release
         run: |
+          # Collect all unique files to upload
+          FILES=()
+          for file in githem-* *.sig; do
+            if [[ -f "$file" ]]; then
+              FILES+=("$file")
+            fi
+          done
+
+          # Remove duplicates and create release
+          printf '%s\n' "${FILES[@]}" | sort -u > files_to_upload.txt
+
           gh release create ${{ github.ref_name }} \
-          --title "Githem ${{ github.ref_name }}" \
-          --generate-notes \
-          githem-* \
-          *.sig
+            --title "Githem ${{ github.ref_name }}" \
+            --generate-notes \
+            $(cat files_to_upload.txt | tr '\n' ' ')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #
+      # - name: Create Release
+      #   run: |
+      #     gh release create ${{ github.ref_name }} \
+      #     --title "Githem ${{ github.ref_name }}" \
+      #     --generate-notes \
+      #     githem-* \
+      #     *.sig
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
