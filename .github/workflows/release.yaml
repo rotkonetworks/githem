@@ -55,10 +55,12 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: |
           brew install pkg-config
+        shell: bash
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
         run: echo "No additional dependencies needed"
+        shell: bash
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -76,16 +78,19 @@ jobs:
           else
             cargo build --release --bin githem --target ${{ matrix.target }}
           fi
+        shell: bash
 
       - name: Prepare binary (Unix)
         if: matrix.os != 'windows-latest'
         run: |
           cp target/${{ matrix.target }}/release/githem ${{ matrix.name }}
           chmod +x ${{ matrix.name }}
+        shell: bash
 
       - name: Prepare binary (Windows)
         if: matrix.os == 'windows-latest'
         run: cp target/${{ matrix.target }}/release/githem.exe ${{ matrix.name }}
+        shell: bash
 
       - name: Generate SHA512 hash
         run: |
