@@ -24,6 +24,10 @@ jobs:
           echo "${{ secrets.SSH_KEY }}" > ssh_key
           chmod 600 ssh_key
           ssh -i ssh_key -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+            echo "${{ secrets.GITHUB_TOKEN }}" \
+              | docker login ghcr.io \
+                --username "${{ github.actor }}" \
+                --password-stdin
             docker pull ghcr.io/${{ github.repository }}:latest
             docker stop githem-api || true
             docker rm githem-api || true
