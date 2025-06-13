@@ -16,15 +16,15 @@ jobs:
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             name: githem-linux-arm64
-          # - os: macos-latest
-          #   target: x86_64-apple-darwin
-          #   name: githem-macos-x64
-          # - os: macos-latest
-          #   target: aarch64-apple-darwin
-          #   name: githem-macos-arm64
-          # - os: windows-latest
-          #   target: x86_64-pc-windows-msvc
-          #   name: githem-windows-x64.exe
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: githem-macos-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: githem-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: githem-windows-x64.exe
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
