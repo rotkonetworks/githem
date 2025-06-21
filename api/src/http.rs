@@ -122,6 +122,120 @@ pub struct QueryParams {
     pub max_size: Option<usize>,
 }
 
+async fn api_info() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "name": "Githem API",
+        "description": "Powertool for grabbing git repositories to be fed for LLMs",
+        "version": env!("CARGO_PKG_VERSION"),
+        "endpoints": {
+            "GET /": {
+                "description": "API information and usage documentation",
+                "response": "This endpoint - API documentation"
+            },
+            "GET /health": {
+                "description": "Health check endpoint",
+                "response": "Service status, timestamp, and version"
+            },
+            "POST /api/ingest": {
+                "description": "Ingest a repository from any Git URL",
+                "request_body": {
+                    "url": "Git repository URL (required)",
+                    "branch": "Branch name (optional, defaults to default branch)",
+                    "subpath": "Subpath within repository (optional)",
+                    "path_prefix": "Path prefix (optional, alias for subpath)",
+                    "include_patterns": "Array of file patterns to include (optional)",
+                    "exclude_patterns": "Array of file patterns to exclude (optional)",
+                    "max_file_size": "Maximum file size in bytes (optional, default: 10MB)"
+                },
+                "response": "Ingestion ID and status",
+                "example": {
+                    "url": "https://github.com/owner/repo",
+                    "branch": "main",
+                    "include_patterns": ["*.rs", "*.md"],
+                    "exclude_patterns": ["target/", "*.lock"]
+                }
+            },
+            "GET /api/result/{id}": {
+                "description": "Get ingestion result by ID",
+                "parameters": {
+                    "id": "Ingestion ID from /api/ingest response"
+                },
+                "response": "Complete ingestion result with metadata and content"
+            },
+            "GET /api/download/{id}": {
+                "description": "Download ingested content as text file",
+                "parameters": {
+                    "id": "Ingestion ID from /api/ingest response"
+                },
+                "response": "Text file download with repository content"
+            },
+            "GET /{owner}/{repo}": {
+                "description": "Direct GitHub repository ingestion",
+                "parameters": {
+                    "owner": "GitHub repository owner",
+                    "repo": "GitHub repository name"
+                },
+                "query_parameters": {
+                    "branch": "Branch name (optional)",
+                    "subpath": "Subpath within repository (optional)",
+                    "include": "Comma-separated include patterns (optional)",
+                    "exclude": "Comma-separated exclude patterns (optional)",
+                    "max_size": "Maximum file size in bytes (optional)"
+                },
+                "response": "Repository content as plain text",
+                "example": "/microsoft/typescript?branch=main&include=*.ts,*.md&exclude=node_modules"
+            },
+            "GET /{owner}/{repo}/tree/{branch}": {
+                "description": "GitHub repository ingestion with specific branch",
+                "parameters": {
+                    "owner": "GitHub repository owner",
+                    "repo": "GitHub repository name",
+                    "branch": "Branch name"
+                },
+                "query_parameters": "Same as /{owner}/{repo}",
+                "response": "Repository content as plain text"
+            },
+            "GET /{owner}/{repo}/tree/{branch}/*path": {
+                "description": "GitHub repository ingestion with specific branch and path",
+                "parameters": {
+                    "owner": "GitHub repository owner",
+                    "repo": "GitHub repository name", 
+                    "branch": "Branch name",
+                    "path": "Path within repository"
+                },
+                "query_parameters": "Same as /{owner}/{repo}",
+                "response": "Repository content as plain text"
+            }
+        },
+        "usage_examples": {
+            "curl_examples": [
+                {
+                    "description": "Ingest a repository",
+                    "command": "curl -X POST http://localhost:42069/api/ingest -H \"Content-Type: application/json\" -d '{\"url\": \"https://github.com/owner/repo\", \"branch\": \"main\"}'"
+                },
+                {
+                    "description": "Get ingestion result",
+                    "command": "curl http://localhost:42069/api/result/{id}"
+                },
+                {
+                    "description": "Download content",
+                    "command": "curl http://localhost:42069/api/download/{id}"
+                },
+                {
+                    "description": "Direct GitHub ingestion",
+                    "command": "curl http://localhost:42069/microsoft/typescript?branch=main"
+                }
+            ]
+        },
+        "notes": {
+            "timeout": "Ingestion requests timeout after 300 seconds",
+            "cache": "Results are cached in memory (max 100 entries, LRU eviction)",
+            "file_size": "Default maximum file size is 10MB",
+            "github_shortcut": "GitHub URLs can be accessed directly via /{owner}/{repo} paths"
+        }
+    }))
+}
+
 async fn health() -> impl IntoResponse {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -299,6 +413,7 @@ pub fn create_router() -> Router {
     let state = AppState::new();
 
     let router = Router::new()
+        .route("/", get(api_info))
         .route("/health", get(health))
         .route("/api/ingest", post(ingest_repository))
         .route("/api/result/{id}", get(get_result))
