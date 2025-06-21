@@ -50,6 +50,11 @@ pub struct IngestRequest {
     pub exclude_patterns: Vec<String>,
     #[serde(default = "default_max_file_size")]
     pub max_file_size: usize,
+    /// Filter preset: "raw", "standard", "code-only", "minimal"
+    pub filter_preset: Option<String>,
+    /// Raw mode - disable all filtering
+    #[serde(default)]
+    pub raw: bool,
 }
 
 fn default_max_file_size() -> usize {
@@ -120,6 +125,8 @@ pub struct QueryParams {
     pub include: Option<String>,
     pub exclude: Option<String>,
     pub max_size: Option<usize>,
+    pub preset: Option<String>,
+    pub raw: Option<bool>,
 }
 
 async fn api_info() -> impl IntoResponse {
@@ -145,14 +152,17 @@ async fn api_info() -> impl IntoResponse {
                     "path_prefix": "Path prefix (optional, alias for subpath)",
                     "include_patterns": "Array of file patterns to include (optional)",
                     "exclude_patterns": "Array of file patterns to exclude (optional)",
-                    "max_file_size": "Maximum file size in bytes (optional, default: 10MB)"
+                    "max_file_size": "Maximum file size in bytes (optional, default: 10MB)",
+                    "filter_preset": "Filter preset: raw, standard, code-only, minimal (optional, default: standard)",
+                    "raw": "Raw mode - disable all filtering (optional, default: false)"
                 },
                 "response": "Ingestion ID and status",
                 "example": {
                     "url": "https://github.com/owner/repo",
                     "branch": "main",
                     "include_patterns": ["*.rs", "*.md"],
-                    "exclude_patterns": ["target/", "*.lock"]
+                    "exclude_patterns": ["target/", "*.lock"],
+                    "filter_preset": "standard"
                 }
             },
             "GET /api/result/{id}": {
@@ -180,10 +190,12 @@ async fn api_info() -> impl IntoResponse {
                     "subpath": "Subpath within repository (optional)",
                     "include": "Comma-separated include patterns (optional)",
                     "exclude": "Comma-separated exclude patterns (optional)",
-                    "max_size": "Maximum file size in bytes (optional)"
+                    "max_size": "Maximum file size in bytes (optional)",
+                    "preset": "Filter preset: raw, standard, code-only, minimal (optional, default: standard)",
+                    "raw": "Raw mode - disable filtering (optional)"
                 },
                 "response": "Repository content as plain text",
-                "example": "/microsoft/typescript?branch=main&include=*.ts,*.md&exclude=node_modules"
+                "example": "/microsoft/typescript?branch=main&include=*.ts,*.md&exclude=node_modules&preset=code-only"
             },
             "GET /{owner}/{repo}/tree/{branch}": {
                 "description": "GitHub repository ingestion with specific branch",
@@ -210,8 +222,12 @@ async fn api_info() -> impl IntoResponse {
         "usage_examples": {
             "curl_examples": [
                 {
-                    "description": "Ingest a repository",
-                    "command": "curl -X POST http://localhost:42069/api/ingest -H \"Content-Type: application/json\" -d '{\"url\": \"https://github.com/owner/repo\", \"branch\": \"main\"}'"
+                    "description": "Ingest a repository with standard filtering",
+                    "command": "curl -X POST http://localhost:42069/api/ingest -H \"Content-Type: application/json\" -d '{\"url\": \"https://github.com/owner/repo\", \"branch\": \"main\", \"filter_preset\": \"standard\"}'"
+                },
+                {
+                    "description": "Ingest with raw mode (no filtering)",
+                    "command": "curl -X POST http://localhost:42069/api/ingest -H \"Content-Type: application/json\" -d '{\"url\": \"https://github.com/owner/repo\", \"raw\": true}'"
                 },
                 {
                     "description": "Get ingestion result",
@@ -222,16 +238,33 @@ async fn api_info() -> impl IntoResponse {
                     "command": "curl http://localhost:42069/api/download/{id}"
                 },
                 {
-                    "description": "Direct GitHub ingestion",
-                    "command": "curl http://localhost:42069/microsoft/typescript?branch=main"
+                    "description": "Direct GitHub ingestion with code-only preset",
+                    "command": "curl http://localhost:42069/microsoft/typescript?branch=main&preset=code-only"
                 }
+            ]
+        },
+        "filtering": {
+            "presets": {
+                "raw": "No filtering - include everything",
+                "standard": "Smart filtering for LLM analysis (default)",
+                "code-only": "Only source code files, exclude documentation",
+                "minimal": "Basic filtering - exclude obvious binary/large files"
+            },
+            "default_excludes": [
+                "Lock files: *.lock, package-lock.json, Cargo.lock",
+                "Dependencies: node_modules/, target/, vendor/",
+                "Build artifacts: dist/, build/, .next/",
+                "Media files: images, videos, fonts",
+                "Binary files: archives, executables",
+                "IDE files: .vscode/, .idea/, .DS_Store"
             ]
         },
         "notes": {
             "timeout": "Ingestion requests timeout after 300 seconds",
             "cache": "Results are cached in memory (max 100 entries, LRU eviction)",
             "file_size": "Default maximum file size is 10MB",
-            "github_shortcut": "GitHub URLs can be accessed directly via /{owner}/{repo} paths"
+            "github_shortcut": "GitHub URLs can be accessed directly via /{owner}/{repo} paths",
+            "filtering": "Smart filtering is enabled by default. Use raw=true or preset=raw to disable."
         }
     }))
 }
@@ -260,6 +293,8 @@ async fn ingest_repository(
         include_patterns: request.include_patterns,
         exclude_patterns: request.exclude_patterns,
         max_file_size: request.max_file_size,
+        filter_preset: request.filter_preset,
+        raw: request.raw,
     };
 
     let ingestion_result = timeout(INGEST_TIMEOUT, async {
@@ -397,6 +432,8 @@ async fn ingest_github_repo(
             .filter(|s| !s.is_empty())
             .collect(),
         max_file_size: params.max_size.unwrap_or(10 * 1024 * 1024),
+        filter_preset: params.preset,
+        raw: params.raw.unwrap_or(false),
     };
 
     let result = timeout(INGEST_TIMEOUT, async {

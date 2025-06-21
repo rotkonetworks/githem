@@ -25,6 +25,10 @@ struct WsQuery {
     max_size: usize,
     #[serde(default)]
     branch: Option<String>,
+    #[serde(default)]
+    preset: Option<String>,
+    #[serde(default)]
+    raw: bool,
 }
 
 fn default_max_size() -> usize {
@@ -62,6 +66,8 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
         include_patterns: params.include,
         exclude_patterns: params.exclude,
         max_file_size: params.max_size,
+        filter_preset: params.preset,
+        raw: params.raw,
     };
 
     if let Err(e) = socket
@@ -92,6 +98,18 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
             {
                 error!("Failed to send message: {}", e);
                 return;
+            }
+
+            // Send filter stats if available
+            if let Some(stats) = &result.filter_stats {
+                let _ = socket
+                    .send(Message::Text(
+                        serde_json::to_string(&WebSocketMessage::FilterStats {
+                            stats: stats.clone(),
+                        })
+                        .unwrap().into(),
+                    ))
+                    .await;
             }
 
             let _ = socket

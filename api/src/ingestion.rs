@@ -1,6 +1,6 @@
 use githem_core::{
     IngestOptions, Ingester, parse_github_url, is_remote_url,
-    GitHubUrlType, IngestionCallback
+    GitHubUrlType, IngestionCallback, FilterPreset, FilterStats
 };
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,6 +17,12 @@ pub struct IngestionParams {
     pub exclude_patterns: Vec<String>,
     #[serde(default = "default_max_file_size")]
     pub max_file_size: usize,
+    /// Filter preset to apply
+    #[serde(default)]
+    pub filter_preset: Option<String>,
+    /// Whether to apply raw mode (no filtering)
+    #[serde(default)]
+    pub raw: bool,
 }
 
 fn default_max_file_size() -> usize {
@@ -30,6 +36,7 @@ pub struct IngestionResult {
     pub tree: String,
     pub content: String,
     pub metadata: RepositoryMetadata,
+    pub filter_stats: Option<FilterStats>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +47,8 @@ pub struct IngestionSummary {
     pub files_analyzed: usize,
     pub total_size: usize,
     pub estimated_tokens: usize,
+    pub filter_preset: String,
+    pub filtering_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,8 +124,35 @@ impl IngestionService {
         Ok(params)
     }
 
+    pub fn parse_filter_preset(preset_str: Option<&str>) -> Option<FilterPreset> {
+        preset_str.and_then(|s| match s.to_lowercase().as_str() {
+            "raw" => Some(FilterPreset::Raw),
+            "standard" => Some(FilterPreset::Standard),
+            "code-only" | "code_only" | "codeonly" => Some(FilterPreset::CodeOnly),
+            "minimal" => Some(FilterPreset::Minimal),
+            _ => None,
+        })
+    }
+
     pub async fn ingest(params: IngestionParams) -> Result<IngestionResult, Box<dyn std::error::Error + Send + Sync>> {
         let params = Self::normalize_params(params)?;
+
+        // Determine filter preset
+        let filter_preset = if params.raw {
+            Some(FilterPreset::Raw)
+        } else if let Some(preset) = Self::parse_filter_preset(params.filter_preset.as_deref()) {
+            Some(preset)
+        } else {
+            Some(FilterPreset::Standard) // Default to standard filtering
+        };
+
+        let filter_preset_name = match filter_preset {
+            Some(FilterPreset::Raw) => "raw",
+            Some(FilterPreset::Standard) => "standard",
+            Some(FilterPreset::CodeOnly) => "code-only",
+            Some(FilterPreset::Minimal) => "minimal",
+            None => "none",
+        };
 
         let options = IngestOptions {
             include_patterns: params.include_patterns.clone(),
@@ -125,6 +161,8 @@ impl IngestionService {
             include_untracked: false,
             branch: params.branch.clone(),
             path_prefix: params.path_prefix.clone(),
+            filter_preset,
+            apply_default_filters: false, // We use explicit presets
         };
 
         let ingester = if is_remote_url(&params.url) {
@@ -133,6 +171,9 @@ impl IngestionService {
             let path = std::path::PathBuf::from(&params.url);
             Ingester::from_path(&path, options)?
         };
+
+        // Get filtering statistics
+        let filter_stats = ingester.get_filter_stats().ok();
 
         let mut content = Vec::new();
         ingester.ingest(&mut content)?;
@@ -156,6 +197,8 @@ impl IngestionService {
             files_analyzed,
             total_size,
             estimated_tokens,
+            filter_preset: filter_preset_name.to_string(),
+            filtering_enabled: filter_preset != Some(FilterPreset::Raw),
         };
 
         let metadata = RepositoryMetadata {
@@ -171,6 +214,7 @@ impl IngestionService {
             tree,
             content: content_str,
             metadata,
+            filter_stats,
         })
     }
 }
@@ -189,6 +233,7 @@ pub enum WebSocketMessage {
     File { path: String, content: String },
     Complete { files: usize, bytes: usize },
     Error { message: String },
+    FilterStats { stats: FilterStats },
 }
 
 impl<F> IngestionCallback for WebSocketCallback<F>

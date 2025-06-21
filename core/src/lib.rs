@@ -1,4 +1,6 @@
 // core/src/lib.rs
+pub mod filtering;
+
 use anyhow::{Context, Result};
 use git2::{Repository, Status, StatusOptions};
 use serde::{Deserialize, Serialize};
@@ -8,6 +10,9 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+// Re-export filtering types for convenience
+pub use filtering::{FilterConfig, FilterPreset, FilterCategories, get_default_excludes, get_excludes_for_preset};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestOptions {
     pub include_patterns: Vec<String>,
@@ -16,6 +21,10 @@ pub struct IngestOptions {
     pub include_untracked: bool,
     pub branch: Option<String>,
     pub path_prefix: Option<String>,
+    /// Filter preset to use (None means use exclude_patterns as-is)
+    pub filter_preset: Option<FilterPreset>,
+    /// Whether to apply default filtering when no preset is specified
+    pub apply_default_filters: bool,
 }
 
 impl Default for IngestOptions {
@@ -27,18 +36,74 @@ impl Default for IngestOptions {
             include_untracked: false,
             branch: None,
             path_prefix: None,
+            filter_preset: None,
+            apply_default_filters: true, // Apply smart filtering by default
         }
+    }
+}
+
+impl IngestOptions {
+    /// Create options with a specific filter preset
+    pub fn with_preset(preset: FilterPreset) -> Self {
+        Self {
+            filter_preset: Some(preset),
+            apply_default_filters: false, // Preset overrides default
+            ..Default::default()
+        }
+    }
+
+    /// Create raw options (no filtering)
+    pub fn raw() -> Self {
+        Self {
+            filter_preset: Some(FilterPreset::Raw),
+            apply_default_filters: false,
+            ..Default::default()
+        }
+    }
+
+    /// Create standard options (default smart filtering)
+    pub fn standard() -> Self {
+        Self {
+            filter_preset: Some(FilterPreset::Standard),
+            apply_default_filters: false,
+            ..Default::default()
+        }
+    }
+
+    /// Get the effective exclude patterns (combines preset, defaults, and custom excludes)
+    pub fn get_effective_excludes(&self) -> Vec<String> {
+        let mut excludes = self.exclude_patterns.clone();
+
+        // Apply preset if specified
+        if let Some(preset) = self.filter_preset {
+            excludes.extend(get_excludes_for_preset(preset));
+        }
+        // Otherwise apply defaults if enabled
+        else if self.apply_default_filters {
+            excludes.extend(get_default_excludes());
+        }
+
+        // Remove duplicates and sort
+        excludes.sort();
+        excludes.dedup();
+        excludes
     }
 }
 
 pub struct Ingester {
     repo: Repository,
     options: IngestOptions,
+    effective_excludes: Vec<String>,
 }
 
 impl Ingester {
     pub fn new(repo: Repository, options: IngestOptions) -> Self {
-        Self { repo, options }
+        let effective_excludes = options.get_effective_excludes();
+        Self { 
+            repo, 
+            options,
+            effective_excludes,
+        }
     }
 
     pub fn from_path(path: &Path, options: IngestOptions) -> Result<Self> {
@@ -64,7 +129,8 @@ impl Ingester {
 
         let path_str = path.to_string_lossy();
 
-        for pattern in &self.options.exclude_patterns {
+        // Use effective excludes (which includes preset + defaults + custom)
+        for pattern in &self.effective_excludes {
             if glob_match(pattern, &path_str) {
                 return Ok(false);
             }
@@ -79,6 +145,108 @@ impl Ingester {
         }
 
         Ok(true)
+    }
+
+    /// Get statistics about what would be filtered
+    pub fn get_filter_stats(&self) -> Result<FilterStats> {
+        let workdir = self
+            .repo
+            .workdir()
+            .context("Repository has no working directory")?;
+
+        let head_result = self.repo.head();
+        let has_commits = head_result.is_ok();
+
+        let mut all_files: Vec<PathBuf> = Vec::new();
+
+        if has_commits {
+            let head = head_result?;
+            let tree = head.peel_to_tree()?;
+
+            let tree_to_walk = if let Some(prefix) = &self.options.path_prefix {
+                match tree.get_path(Path::new(prefix)) {
+                    Ok(entry) => self.repo.find_tree(entry.id())?,
+                    Err(_) => return Ok(FilterStats::default()),
+                }
+            } else {
+                tree
+            };
+
+            tree_to_walk.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+                if entry.kind() == Some(git2::ObjectType::Blob) {
+                    if let Some(name) = entry.name() {
+                        let path = if dir.is_empty() {
+                            PathBuf::from(name)
+                        } else {
+                            PathBuf::from(dir).join(name)
+                        };
+                        let path = if let Some(prefix) = &self.options.path_prefix {
+                            PathBuf::from(prefix).join(path)
+                        } else {
+                            path
+                        };
+                        all_files.push(path);
+                    }
+                }
+                git2::TreeWalkResult::Ok
+            })?;
+        }
+
+        if self.options.include_untracked || !has_commits {
+            let mut status_opts = StatusOptions::new();
+            status_opts.include_untracked(true);
+            status_opts.include_ignored(false);
+
+            let statuses = self.repo.statuses(Some(&mut status_opts))?;
+
+            for status in statuses.iter() {
+                if status.status().contains(Status::WT_NEW) {
+                    if let Some(path) = status.path() {
+                        let path_buf = PathBuf::from(path);
+                        if let Some(prefix) = &self.options.path_prefix {
+                            if !path.starts_with(prefix) {
+                                continue;
+                            }
+                        }
+                        all_files.push(path_buf);
+                    }
+                }
+            }
+        }
+
+        all_files.sort();
+        all_files.dedup();
+
+        let mut stats = FilterStats::default();
+        stats.total_files = all_files.len();
+
+        for file in all_files {
+            let full_path = workdir.join(&file);
+            
+            if !full_path.exists() || !full_path.is_file() {
+                continue;
+            }
+
+            if let Ok(metadata) = std::fs::metadata(&full_path) {
+                stats.total_size += metadata.len();
+
+                if self.should_include(&file)? {
+                    stats.included_files += 1;
+                    stats.included_size += metadata.len();
+                } else {
+                    stats.excluded_files += 1;
+                    stats.excluded_size += metadata.len();
+                    
+                    // Categorize exclusion reason
+                    let path_str = file.to_string_lossy();
+                    if self.effective_excludes.iter().any(|p| glob_match(p, &path_str)) {
+                        stats.excluded_by_filter += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(stats)
     }
 
     pub fn ingest<W: Write>(&self, output: &mut W) -> Result<()> {
@@ -96,11 +264,10 @@ impl Ingester {
             let head = head_result?;
             let tree = head.peel_to_tree()?;
 
-            // If path_prefix is specified, get the subtree
             let tree_to_walk = if let Some(prefix) = &self.options.path_prefix {
                 match tree.get_path(Path::new(prefix)) {
                     Ok(entry) => self.repo.find_tree(entry.id())?,
-                    Err(_) => return Ok(()), // Path doesn't exist, return empty
+                    Err(_) => return Ok(()),
                 }
             } else {
                 tree
@@ -114,7 +281,6 @@ impl Ingester {
                         } else {
                             PathBuf::from(dir).join(name)
                         };
-                        // Add the prefix back to the path for display
                         let path = if let Some(prefix) = &self.options.path_prefix {
                             PathBuf::from(prefix).join(path)
                         } else {
@@ -138,7 +304,6 @@ impl Ingester {
                 if status.status().contains(Status::WT_NEW) {
                     if let Some(path) = status.path() {
                         let path_buf = PathBuf::from(path);
-                        // Apply path prefix filter
                         if let Some(prefix) = &self.options.path_prefix {
                             if !path.starts_with(prefix) {
                                 continue;
@@ -190,6 +355,35 @@ impl Ingester {
         writeln!(output)?;
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct FilterStats {
+    pub total_files: usize,
+    pub included_files: usize,
+    pub excluded_files: usize,
+    pub total_size: u64,
+    pub included_size: u64,
+    pub excluded_size: u64,
+    pub excluded_by_filter: usize,
+}
+
+impl FilterStats {
+    pub fn inclusion_rate(&self) -> f64 {
+        if self.total_files == 0 {
+            0.0
+        } else {
+            self.included_files as f64 / self.total_files as f64
+        }
+    }
+
+    pub fn size_reduction(&self) -> f64 {
+        if self.total_size == 0 {
+            0.0
+        } else {
+            self.excluded_size as f64 / self.total_size as f64
+        }
     }
 }
 
@@ -611,64 +805,6 @@ fn glob_match(pattern: &str, path: &str) -> bool {
     path == pattern || path.starts_with(&format!("{pattern}/"))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_glob_match() {
-        assert!(glob_match("*.rs", "main.rs"));
-        assert!(glob_match("*.rs", "src/main.rs"));
-        assert!(glob_match("src/*", "src/main.rs"));
-        assert!(!glob_match("*.rs", "main.py"));
-    }
-
-    #[test]
-    fn test_url_validation() {
-        assert!(is_remote_url("https://github.com/user/repo"));
-        assert!(is_remote_url("https://gitlab.com/user/repo"));
-        assert!(!is_remote_url("file:///etc/passwd"));
-        assert!(!is_remote_url("ftp://example.com/"));
-        assert!(!is_remote_url("https://evil.com/"));
-    }
-
-    #[test]
-    fn test_github_url_parsing() {
-        // Basic repo
-        let parsed = parse_github_url("https://github.com/rust-lang/rust").unwrap();
-        assert_eq!(parsed.owner, "rust-lang");
-        assert_eq!(parsed.repo, "rust");
-        assert_eq!(parsed.url_type, GitHubUrlType::Repository);
-
-        // Tree with path
-        let parsed = parse_github_url("https://github.com/owner/repo/tree/main/src/lib").unwrap();
-        assert_eq!(parsed.owner, "owner");
-        assert_eq!(parsed.repo, "repo");
-        assert_eq!(parsed.branch, Some("main".to_string()));
-        assert_eq!(parsed.path, Some("src/lib".to_string()));
-        assert_eq!(parsed.url_type, GitHubUrlType::Tree);
-
-        // Blob
-        let parsed = parse_github_url("https://github.com/owner/repo/blob/master/README.md").unwrap();
-        assert_eq!(parsed.url_type, GitHubUrlType::Blob);
-        assert_eq!(parsed.path, Some("README.md".to_string()));
-
-        // Raw
-        let parsed = parse_github_url("https://raw.githubusercontent.com/owner/repo/main/file.txt").unwrap();
-        assert_eq!(parsed.url_type, GitHubUrlType::Raw);
-        assert_eq!(parsed.branch, Some("main".to_string()));
-        assert_eq!(parsed.path, Some("file.txt".to_string()));
-
-        // Gist
-        let parsed = parse_github_url("https://gist.github.com/user/1234567890abcdef").unwrap();
-        assert_eq!(parsed.owner, "user");
-        assert_eq!(parsed.repo, "1234567890abcdef");
-        assert_eq!(parsed.url_type, GitHubUrlType::Gist);
-    }
-}
-
-// ============ Additional functions needed by API ============
-
 /// Validate GitHub username/repo name according to GitHub's rules
 pub fn validate_github_name(name: &str) -> bool {
     !name.is_empty()
@@ -719,8 +855,7 @@ pub fn count_files(content: &str) -> usize {
     content.matches("=== ").count()
 }
 
-// ============ Enhanced Ingester with callbacks ============
-
+// Enhanced Ingester with callbacks
 pub trait IngestionCallback: Send + Sync {
     fn on_progress(&mut self, _stage: &str, _message: &str) {}
     fn on_file(&mut self, _path: &Path, _content: &str) {}
@@ -861,8 +996,7 @@ impl Ingester {
     }
 }
 
-// ============ Repository metadata extraction ============
-
+// Repository metadata extraction
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepositoryMetadata {
     pub url: String,
@@ -931,8 +1065,59 @@ impl Ingester {
 }
 
 #[cfg(test)]
-mod additional_tests {
+mod tests {
     use super::*;
+
+    #[test]
+    fn test_glob_match() {
+        assert!(glob_match("*.rs", "main.rs"));
+        assert!(glob_match("*.rs", "src/main.rs"));
+        assert!(glob_match("src/*", "src/main.rs"));
+        assert!(!glob_match("*.rs", "main.py"));
+    }
+
+    #[test]
+    fn test_url_validation() {
+        assert!(is_remote_url("https://github.com/user/repo"));
+        assert!(is_remote_url("https://gitlab.com/user/repo"));
+        assert!(!is_remote_url("file:///etc/passwd"));
+        assert!(!is_remote_url("ftp://example.com/"));
+        assert!(!is_remote_url("https://evil.com/"));
+    }
+
+    #[test]
+    fn test_github_url_parsing() {
+        // Basic repo
+        let parsed = parse_github_url("https://github.com/rust-lang/rust").unwrap();
+        assert_eq!(parsed.owner, "rust-lang");
+        assert_eq!(parsed.repo, "rust");
+        assert_eq!(parsed.url_type, GitHubUrlType::Repository);
+
+        // Tree with path
+        let parsed = parse_github_url("https://github.com/owner/repo/tree/main/src/lib").unwrap();
+        assert_eq!(parsed.owner, "owner");
+        assert_eq!(parsed.repo, "repo");
+        assert_eq!(parsed.branch, Some("main".to_string()));
+        assert_eq!(parsed.path, Some("src/lib".to_string()));
+        assert_eq!(parsed.url_type, GitHubUrlType::Tree);
+
+        // Blob
+        let parsed = parse_github_url("https://github.com/owner/repo/blob/master/README.md").unwrap();
+        assert_eq!(parsed.url_type, GitHubUrlType::Blob);
+        assert_eq!(parsed.path, Some("README.md".to_string()));
+
+        // Raw
+        let parsed = parse_github_url("https://raw.githubusercontent.com/owner/repo/main/file.txt").unwrap();
+        assert_eq!(parsed.url_type, GitHubUrlType::Raw);
+        assert_eq!(parsed.branch, Some("main".to_string()));
+        assert_eq!(parsed.path, Some("file.txt".to_string()));
+
+        // Gist
+        let parsed = parse_github_url("https://gist.github.com/user/1234567890abcdef").unwrap();
+        assert_eq!(parsed.owner, "user");
+        assert_eq!(parsed.repo, "1234567890abcdef");
+        assert_eq!(parsed.url_type, GitHubUrlType::Gist);
+    }
 
     #[test]
     fn test_validate_github_name() {
@@ -959,5 +1144,36 @@ mod additional_tests {
         let tree = generate_tree_representation(content);
         assert!(tree.contains("📄 src/main.rs"));
         assert!(tree.contains("📄 Cargo.toml"));
+    }
+
+    #[test]
+    fn test_ingest_options() {
+        let options = IngestOptions::raw();
+        assert_eq!(options.filter_preset, Some(FilterPreset::Raw));
+        assert!(!options.apply_default_filters);
+
+        let options = IngestOptions::standard();
+        assert_eq!(options.filter_preset, Some(FilterPreset::Standard));
+        assert!(!options.apply_default_filters);
+
+        let options = IngestOptions::with_preset(FilterPreset::CodeOnly);
+        assert_eq!(options.filter_preset, Some(FilterPreset::CodeOnly));
+        assert!(!options.apply_default_filters);
+    }
+
+    #[test]
+    fn test_filter_stats() {
+        let stats = FilterStats {
+            total_files: 100,
+            included_files: 75,
+            excluded_files: 25,
+            total_size: 1000000,
+            included_size: 750000,
+            excluded_size: 250000,
+            excluded_by_filter: 25,
+        };
+
+        assert_eq!(stats.inclusion_rate(), 0.75);
+        assert_eq!(stats.size_reduction(), 0.25);
     }
 }
