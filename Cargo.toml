@@ -3,8 +3,8 @@ members = ["core", "cli", "api"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
-edition = "2024"
+version = "0.2.0"
+edition = "2021"
 authors = ["Rotko Networks <hq@rotko.net>"]
 license = "MIT"
 repository = "https://github.com/rotko/githem"
@@ -29,6 +29,7 @@ html-escape = "0.2"
 url = "2.5"
 rand = "0.9"
 libc = "0.2"
+walkdir = "0.1"
 
 [profile.release]
 opt-level = 3

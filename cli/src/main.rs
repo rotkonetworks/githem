@@ -37,6 +37,10 @@ struct Cli {
     /// Include untracked files
     #[arg(short = 'u', long)]
     untracked: bool,
+    
+    /// Path prefix to filter (e.g., "p2p" for monorepo subfolder)
+    #[arg(short = 'p', long)]
+    path_prefix: Option<String>,
 
     /// Quiet mode (no header output)
     #[arg(short = 'q', long)]
@@ -52,6 +56,7 @@ fn main() -> Result<()> {
         max_file_size: cli.max_size,
         include_untracked: cli.untracked,
         branch: cli.branch.clone(),
+        path_prefix: cli.path_prefix,
     };
 
     let ingester = if is_remote_url(&cli.source) {

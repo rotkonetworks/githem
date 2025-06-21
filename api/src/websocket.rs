@@ -1,4 +1,4 @@
-// websocket.rs
+use crate::ingestion::{IngestionService, IngestionParams, WebSocketMessage};
 use anyhow::Result;
 use axum::{
     Router,
@@ -9,8 +9,7 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use githem_core::{IngestOptions, Ingester};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::net::SocketAddr;
 use std::time::Instant;
 use tracing::{error, info};
@@ -29,28 +28,7 @@ struct WsQuery {
 }
 
 fn default_max_size() -> usize {
-    1048576
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-enum WsMessage {
-    Progress {
-        stage: String,
-        message: String,
-    },
-    File {
-        path: String,
-        content: String,
-    },
-    Complete {
-        files: usize,
-        bytes: usize,
-        elapsed_ms: u128,
-    },
-    Error {
-        message: String,
-    },
+    10 * 1024 * 1024
 }
 
 async fn websocket_handler(
@@ -61,17 +39,15 @@ async fn websocket_handler(
 }
 
 async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
-    let start = Instant::now();
+    let _start = Instant::now();
 
-    // Send initial progress
     if let Err(e) = socket
         .send(Message::Text(
-            serde_json::to_string(&WsMessage::Progress {
+            serde_json::to_string(&WebSocketMessage::Progress {
                 stage: "starting".to_string(),
                 message: format!("Processing {}", params.url),
             })
-            .unwrap()
-            .into(),
+            .unwrap().into(),
         ))
         .await
     {
@@ -79,24 +55,22 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
         return;
     }
 
-    // Create ingester
-    let options = IngestOptions {
+    let ingestion_params = IngestionParams {
+        url: params.url.clone(),
+        branch: params.branch,
+        path_prefix: None,
         include_patterns: params.include,
         exclude_patterns: params.exclude,
         max_file_size: params.max_size,
-        include_untracked: false,
-        branch: params.branch,
     };
 
-    // Clone repository
     if let Err(e) = socket
         .send(Message::Text(
-            serde_json::to_string(&WsMessage::Progress {
+            serde_json::to_string(&WebSocketMessage::Progress {
                 stage: "cloning".to_string(),
                 message: "Cloning repository...".to_string(),
             })
-            .unwrap()
-            .into(),
+            .unwrap().into(),
         ))
         .await
     {
@@ -104,83 +78,55 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
         return;
     }
 
-    let ingester = match Ingester::from_url(&params.url, options) {
-        Ok(ing) => ing,
+    match IngestionService::ingest(ingestion_params).await {
+        Ok(result) => {
+            if let Err(e) = socket
+                .send(Message::Text(
+                    serde_json::to_string(&WebSocketMessage::Progress {
+                        stage: "ingesting".to_string(),
+                        message: "Processing files...".to_string(),
+                    })
+                    .unwrap().into(),
+                ))
+                .await
+            {
+                error!("Failed to send message: {}", e);
+                return;
+            }
+
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::to_string(&WebSocketMessage::File {
+                        path: "all_files.txt".to_string(),
+                        content: result.content,
+                    })
+                    .unwrap().into(),
+                ))
+                .await;
+
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::to_string(&WebSocketMessage::Complete {
+                        files: result.summary.files_analyzed,
+                        bytes: result.summary.total_size,
+                    })
+                    .unwrap().into(),
+                ))
+                .await;
+
+            info!("WebSocket session completed for {}", params.url);
+        }
         Err(e) => {
             let _ = socket
                 .send(Message::Text(
-                    serde_json::to_string(&WsMessage::Error {
-                        message: format!("Failed to clone: {e}"),
+                    serde_json::to_string(&WebSocketMessage::Error {
+                        message: format!("Failed: {e}"),
                     })
-                    .unwrap()
-                    .into(),
+                    .unwrap().into(),
                 ))
                 .await;
-            return;
         }
-    };
-
-    // Stream files
-    if let Err(e) = socket
-        .send(Message::Text(
-            serde_json::to_string(&WsMessage::Progress {
-                stage: "ingesting".to_string(),
-                message: "Processing files...".to_string(),
-            })
-            .unwrap()
-            .into(),
-        ))
-        .await
-    {
-        error!("Failed to send message: {}", e);
-        return;
     }
-
-    // For now, collect all and send
-    // TODO: Modify core to support streaming individual files
-    let mut output = Vec::new();
-    if let Err(e) = ingester.ingest(&mut output) {
-        let _ = socket
-            .send(Message::Text(
-                serde_json::to_string(&WsMessage::Error {
-                    message: format!("Ingestion failed: {e}"),
-                })
-                .unwrap()
-                .into(),
-            ))
-            .await;
-        return;
-    }
-
-    // Convert to string and send as one big file for now
-    if let Ok(content) = String::from_utf8(output.clone()) {
-        let _ = socket
-            .send(Message::Text(
-                serde_json::to_string(&WsMessage::File {
-                    path: "all_files.txt".to_string(),
-                    content,
-                })
-                .unwrap()
-                .into(),
-            ))
-            .await;
-    }
-
-    // Send completion
-    let files_count = output.windows(3).filter(|w| w == b"===").count() / 2;
-    let _ = socket
-        .send(Message::Text(
-            serde_json::to_string(&WsMessage::Complete {
-                files: files_count,
-                bytes: output.len(),
-                elapsed_ms: start.elapsed().as_millis(),
-            })
-            .unwrap()
-            .into(),
-        ))
-        .await;
-
-    info!("WebSocket session completed for {}", params.url);
 }
 
 pub async fn serve(addr: SocketAddr) -> Result<()> {

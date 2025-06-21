@@ -11,3 +11,4 @@ git2 = { workspace = true }
 uuid = { workspace = true }
 serde = { workspace = true }
 libc = { workspace = true }
+walkdir.workspace = true
