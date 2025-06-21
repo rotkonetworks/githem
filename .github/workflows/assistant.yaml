@@ -1,4 +1,4 @@
-name: Security Assistant
+name: Code Assistant
 on:
  issue_comment:
    types: [created]
@@ -13,6 +13,12 @@ on:
 jobs:
  claude-response:
    runs-on: ubuntu-latest
+   if: |
+     (github.event_name == 'issue_comment' && contains(fromJSON('["member", "owner"]'), github.event.comment.author_association)) ||
+     (github.event_name == 'pull_request_review_comment' && contains(fromJSON('["member", "owner"]'), github.event.comment.author_association)) ||
+     (github.event_name == 'pull_request_review' && contains(fromJSON('["member", "owner"]'), github.event.review.author_association)) ||
+     (github.event_name == 'issues' && contains(fromJSON('["member", "owner"]'), github.event.issue.author_association)) ||
+     (github.event_name == 'pull_request' && contains(fromJSON('["member", "owner"]'), github.event.pull_request.author_association))
    permissions:
     id-token: write
     contents: write
@@ -27,4 +33,3 @@ jobs:
          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
          trigger_phrase: "/claude"
          timeout_minutes: 30
-         allowed_tools: "Bash(cargo check),Bash(cargo clippy),Bash(cargo test),Bash(npm run build),Bash(npm test),Bash(bun test),Bash(tsc),Bash(git log),Bash(git diff),Bash(git show),Bash(find),Bash(grep),Bash(ls),Bash(cat),Bash(head),Bash(tail),Bash(awk),Bash(jq),Bash(sed),Bash(wc),Bash(sort),Bash(uniq),Bash(cut),Bash(xargs)"

@@ -10,14 +10,21 @@ on:
    types: [submitted]
  pull_request:
    types: [opened, synchronize]
+
 jobs:
  claude-response:
    runs-on: ubuntu-latest
+   if: |
+     (github.event_name == 'issue_comment' && contains(fromJSON('["member", "owner"]'), github.event.comment.author_association)) ||
+     (github.event_name == 'pull_request_review_comment' && contains(fromJSON('["member", "owner"]'), github.event.comment.author_association)) ||
+     (github.event_name == 'pull_request_review' && contains(fromJSON('["member", "owner"]'), github.event.review.author_association)) ||
+     (github.event_name == 'issues' && contains(fromJSON('["member", "owner"]'), github.event.issue.author_association)) ||
+     (github.event_name == 'pull_request' && contains(fromJSON('["member", "owner"]'), github.event.pull_request.author_association))
    permissions:
-    id-token: write
-    contents: write
-    issues: write
-    pull-requests: write
+     id-token: write
+     contents: write
+     issues: write
+     pull-requests: write
    steps:
      - uses: actions/checkout@v4
        with:
@@ -29,16 +36,15 @@ jobs:
          timeout_minutes: 30
          allowed_tools: "Bash(cargo check),Bash(cargo clippy),Bash(cargo test),Bash(npm run build),Bash(npm test),Bash(bun test),Bash(tsc),Bash(git log),Bash(git diff),Bash(git show),Bash(find),Bash(grep),Bash(ls),Bash(cat),Bash(head),Bash(tail),Bash(awk),Bash(jq),Bash(sed),Bash(wc),Bash(sort),Bash(uniq),Bash(cut),Bash(xargs)"
          custom_instructions: |
-            You are an plural minded anarchist security researcher working on critical infrastructure.
-            One bug means lost lives. Think and review like Daniel Micay. Zero tolerance for vulns.
-            Explain the bugs following way, but even better if you provide direct fix into the PR as a commit or into separate branch.
-
-            Issue: [what breaks]
-            Line: [file:line]
-            Fix: [how to fix]
-            Example: |
-                ```rust
-                fn example() {
-                  // Example code
-                }
-                ```
+           You are an plural minded anarchist security researcher working on critical infrastructure.
+           One bug means lost lives. Think and review like Daniel Micay. Zero tolerance for vulns.
+           Explain the bugs following way, but even better if you provide direct fix into the PR as a commit or into separate branch.
+           Issue: [what breaks]
+           Line: [file:line]
+           Fix: [how to fix]
+           Example: |
+               ```rust
+               fn example() {
+                 // Example code
+               }
+               ```
