@@ -211,12 +211,27 @@ async fn api_info() -> impl IntoResponse {
                 "description": "GitHub repository ingestion with specific branch and path",
                 "parameters": {
                     "owner": "GitHub repository owner",
-                    "repo": "GitHub repository name", 
+                    "repo": "GitHub repository name",
                     "branch": "Branch name",
                     "path": "Path within repository"
                 },
                 "query_parameters": "Same as /{owner}/{repo}",
                 "response": "Repository content as plain text"
+            },
+            "GET /{owner}/{repo}/compare/{compare_spec}": {
+                "description": "Compare two branches/commits and get the diff",
+                "parameters": {
+                    "owner": "GitHub repository owner",
+                    "repo": "GitHub repository name",
+                    "compare_spec": "Comparison specification (e.g., 'main...feature' or 'main..feature')"
+                },
+                "query_parameters": {
+                    "preset": "Filter preset for diff output (optional)",
+                    "include": "Include only files matching patterns in diff (optional)",
+                    "exclude": "Exclude files matching patterns from diff (optional)"
+                },
+                "response": "Unified diff format with statistics",
+                "example": "/polytope-labs/hyperbridge/compare/main...tendermint"
             }
         },
         "usage_examples": {
@@ -240,6 +255,10 @@ async fn api_info() -> impl IntoResponse {
                 {
                     "description": "Direct GitHub ingestion with code-only preset",
                     "command": "curl http://localhost:42069/microsoft/typescript?branch=main&preset=code-only"
+                },
+                {
+                    "description": "Compare branches",
+                    "command": "curl http://localhost:42069/owner/repo/compare/main...feature"
                 }
             ]
         },
@@ -264,7 +283,8 @@ async fn api_info() -> impl IntoResponse {
             "cache": "Results are cached in memory (max 100 entries, LRU eviction)",
             "file_size": "Default maximum file size is 10MB",
             "github_shortcut": "GitHub URLs can be accessed directly via /{owner}/{repo} paths",
-            "filtering": "Smart filtering is enabled by default. Use raw=true or preset=raw to disable."
+            "filtering": "Smart filtering is enabled by default. Use raw=true or preset=raw to disable.",
+            "compare": "Compare supports both two-dot (..) and three-dot (...) syntax"
         }
     }))
 }
@@ -376,7 +396,6 @@ async fn download_content(
     }
 }
 
-
 async fn handle_repo(
     Path((owner, repo)): Path<(String, String)>,
     Query(params): Query<QueryParams>,
@@ -396,6 +415,62 @@ async fn handle_repo_path(
     Query(params): Query<QueryParams>,
 ) -> Result<impl IntoResponse, AppError> {
     ingest_github_repo(owner, repo, Some(branch), Some(path), params).await
+}
+
+async fn handle_repo_compare(
+    Path((owner, repo, compare_spec)): Path<(String, String, String)>,
+    Query(params): Query<QueryParams>,
+) -> Result<impl IntoResponse, AppError> {
+    if !IngestionService::validate_github_name(&owner)
+        || !IngestionService::validate_github_name(&repo)
+    {
+        return Err(AppError::InvalidRequest(
+            "Invalid owner or repo name".to_string(),
+        ));
+    }
+
+    // Parse compare spec (e.g., "main...feature" or "main..feature")
+    let (base, head) = parse_compare_spec(&compare_spec)
+        .ok_or_else(|| AppError::InvalidRequest(
+            "Invalid compare format. Use 'base...head' or 'base..head'".to_string()
+        ))?;
+
+    let url = format!("https://github.com/{owner}/{repo}");
+
+    // Generate the diff
+    let diff_content = timeout(INGEST_TIMEOUT, async {
+        IngestionService::generate_diff(
+            &url,
+            &base,
+            &head,
+            params.include.as_deref(),
+            params.exclude.as_deref(),
+        ).await
+    })
+    .await
+    .map_err(|_| AppError::Timeout)?
+    .map_err(|e| AppError::InternalError(format!("Failed to generate diff: {}", e)))?;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        "text/plain; charset=utf-8"
+            .parse()
+            .map_err(|e| AppError::InternalError(format!("Header parse error: {}", e)))?,
+    );
+
+    Ok((headers, diff_content))
+}
+
+fn parse_compare_spec(spec: &str) -> Option<(String, String)> {
+    // Support both three-dot (...) and two-dot (..) syntax
+    if let Some((base, head)) = spec.split_once("...") {
+        Some((base.to_string(), head.to_string()))
+    } else if let Some((base, head)) = spec.split_once("..") {
+        Some((base.to_string(), head.to_string()))
+    } else {
+        None
+    }
 }
 
 async fn ingest_github_repo(
@@ -456,6 +531,7 @@ pub fn create_router() -> Router {
         .route("/api/result/{id}", get(get_result))
         .route("/api/download/{id}", get(download_content))
         .route("/{owner}/{repo}", get(handle_repo))
+        .route("/{owner}/{repo}/compare/{compare_spec}", get(handle_repo_compare))
         .route("/{owner}/{repo}/tree/{branch}", get(handle_repo_branch))
         .route(
             "/{owner}/{repo}/tree/{branch}/{*path}",

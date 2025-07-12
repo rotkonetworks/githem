@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // Re-export filtering types for convenience
-pub use filtering::{FilterConfig, FilterPreset, FilterCategories, get_default_excludes, get_excludes_for_preset};
+pub use filtering::{
+    get_default_excludes, get_excludes_for_preset, FilterCategories, FilterConfig, FilterPreset,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestOptions {
@@ -92,15 +94,15 @@ impl IngestOptions {
 
 pub struct Ingester {
     repo: Repository,
-    options: IngestOptions,
+    pub options: IngestOptions,
     effective_excludes: Vec<String>,
 }
 
 impl Ingester {
     pub fn new(repo: Repository, options: IngestOptions) -> Self {
         let effective_excludes = options.get_effective_excludes();
-        Self { 
-            repo, 
+        Self {
+            repo,
             options,
             effective_excludes,
         }
@@ -114,6 +116,11 @@ impl Ingester {
     pub fn from_url(url: &str, options: IngestOptions) -> Result<Self> {
         let repo = clone_repository(url, options.branch.as_deref())?;
         Ok(Self::new(repo, options))
+    }
+
+    /// Get the filter preset being used
+    pub fn get_filter_preset(&self) -> Option<FilterPreset> {
+        self.options.filter_preset
     }
 
     fn should_include(&self, path: &Path) -> Result<bool> {
@@ -222,7 +229,7 @@ impl Ingester {
 
         for file in all_files {
             let full_path = workdir.join(&file);
-            
+
             if !full_path.exists() || !full_path.is_file() {
                 continue;
             }
@@ -236,10 +243,14 @@ impl Ingester {
                 } else {
                     stats.excluded_files += 1;
                     stats.excluded_size += metadata.len();
-                    
+
                     // Categorize exclusion reason
                     let path_str = file.to_string_lossy();
-                    if self.effective_excludes.iter().any(|p| glob_match(p, &path_str)) {
+                    if self
+                        .effective_excludes
+                        .iter()
+                        .any(|p| glob_match(p, &path_str))
+                    {
                         stats.excluded_by_filter += 1;
                     }
                 }
@@ -356,6 +367,233 @@ impl Ingester {
 
         Ok(())
     }
+
+    pub fn generate_diff(&self, base: &str, head: &str) -> Result<String> {
+        let repo = &self.repo;
+        
+        // Parse refs
+        let (base_object, _) = repo.revparse_ext(base)?;
+        let (head_object, _) = repo.revparse_ext(head)?;
+        
+        let base_commit = base_object.peel_to_commit()?;
+        let head_commit = head_object.peel_to_commit()?;
+        
+        let base_tree = base_commit.tree()?;
+        let head_tree = head_commit.tree()?;
+        
+        // Generate diff
+        let mut diff_opts = git2::DiffOptions::new();
+        let diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut diff_opts))?;
+        
+        let mut output = String::new();
+        output.push_str(&format!("# Comparing {} to {}\n\n", base, head));
+        
+        // Stats
+        let stats = diff.stats()?;
+        output.push_str(&format!("Files changed: {}\n", stats.files_changed()));
+        output.push_str(&format!("Insertions: {}\n", stats.insertions()));
+        output.push_str(&format!("Deletions: {}\n\n", stats.deletions()));
+        
+        // Generate patch
+        diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+            let content = std::str::from_utf8(line.content()).unwrap_or("[binary]");
+            output.push_str(content);
+            true
+        })?;
+        
+        Ok(output)
+    }
+
+    /// Ingest with progress callbacks (for WebSocket streaming)
+    pub fn ingest_with_callback<W: Write, C: IngestionCallback>(
+        &self,
+        output: &mut W,
+        callback: &mut C,
+    ) -> Result<()> {
+        callback.on_progress("starting", "Beginning ingestion");
+
+        let workdir = self
+            .repo
+            .workdir()
+            .context("Repository has no working directory")?;
+
+        let head_result = self.repo.head();
+        let has_commits = head_result.is_ok();
+
+        let mut files: Vec<PathBuf> = Vec::new();
+
+        callback.on_progress("scanning", "Scanning repository files");
+
+        if has_commits {
+            let head = head_result?;
+            let tree = head.peel_to_tree()?;
+
+            // If path_prefix is specified, get the subtree
+            let tree_to_walk = if let Some(prefix) = &self.options.path_prefix {
+                match tree.get_path(Path::new(prefix)) {
+                    Ok(entry) => self.repo.find_tree(entry.id())?,
+                    Err(_) => {
+                        callback.on_error(&format!("Path '{}' not found", prefix));
+                        return Ok(());
+                    }
+                }
+            } else {
+                tree
+            };
+
+            tree_to_walk.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+                if entry.kind() == Some(git2::ObjectType::Blob) {
+                    if let Some(name) = entry.name() {
+                        let path = if dir.is_empty() {
+                            PathBuf::from(name)
+                        } else {
+                            PathBuf::from(dir).join(name)
+                        };
+                        // Add the prefix back to the path for display
+                        let path = if let Some(prefix) = &self.options.path_prefix {
+                            PathBuf::from(prefix).join(path)
+                        } else {
+                            path
+                        };
+                        files.push(path);
+                    }
+                }
+                git2::TreeWalkResult::Ok
+            })?;
+        }
+
+        if self.options.include_untracked || !has_commits {
+            let mut status_opts = StatusOptions::new();
+            status_opts.include_untracked(true);
+            status_opts.include_ignored(false);
+
+            let statuses = self.repo.statuses(Some(&mut status_opts))?;
+
+            for status in statuses.iter() {
+                if status.status().contains(Status::WT_NEW) {
+                    if let Some(path) = status.path() {
+                        let path_buf = PathBuf::from(path);
+                        // Apply path prefix filter
+                        if let Some(prefix) = &self.options.path_prefix {
+                            if !path.starts_with(prefix) {
+                                continue;
+                            }
+                        }
+                        files.push(path_buf);
+                    }
+                }
+            }
+        }
+
+        files.sort();
+        files.dedup();
+
+        callback.on_progress("processing", &format!("Processing {} files", files.len()));
+
+        let mut processed = 0;
+        let mut total_bytes = 0;
+
+        for file in files {
+            let full_path = workdir.join(&file);
+
+            if !full_path.exists() || !full_path.is_file() {
+                continue;
+            }
+
+            if !self.should_include(&file)? {
+                continue;
+            }
+
+            if let Ok(metadata) = std::fs::metadata(&full_path) {
+                if metadata.len() > self.options.max_file_size as u64 {
+                    continue;
+                }
+
+                let content = std::fs::read_to_string(&full_path)
+                    .unwrap_or_else(|_| "[Binary file]".to_string());
+
+                // Write to output
+                writeln!(output, "=== {} ===", file.display())?;
+                writeln!(output, "{content}")?;
+                writeln!(output)?;
+
+                // Callback for streaming
+                callback.on_file(&file, &content);
+
+                total_bytes += content.len();
+                processed += 1;
+            }
+        }
+
+        if processed == 0 {
+            callback.on_error("No files found to ingest");
+            eprintln!("Warning: No files found to ingest");
+        } else {
+            callback.on_complete(processed, total_bytes);
+        }
+
+        Ok(())
+    }
+
+    /// Extract metadata about the repository
+    pub fn get_metadata(&self) -> Result<RepositoryMetadata> {
+        let repo = &self.repo;
+
+        // Get default branch
+        let default_branch = repo
+            .head()
+            .ok()
+            .and_then(|h| h.shorthand().map(String::from))
+            .unwrap_or_else(|| "main".to_string());
+
+        // Get all branches
+        let mut branches = Vec::new();
+        for branch_result in repo.branches(Some(git2::BranchType::Local))? {
+            if let Ok((branch, _)) = branch_result {
+                if let Ok(Some(name)) = branch.name() {
+                    branches.push(name.to_string());
+                }
+            }
+        }
+
+        // Get remote URL
+        let remote_url = repo
+            .find_remote("origin")
+            .ok()
+            .and_then(|r| r.url().map(String::from));
+
+        // Get last commit info
+        let last_commit = repo
+            .head()
+            .ok()
+            .and_then(|h| h.peel_to_commit().ok())
+            .map(|c| {
+                format!(
+                    "{} - {}",
+                    c.id().to_string().chars().take(8).collect::<String>(),
+                    c.summary().unwrap_or("No message")
+                )
+            });
+
+        // Calculate repo size (approximate)
+        let size = repo.workdir().and_then(|w| {
+            walkdir::WalkDir::new(w)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter_map(|e| e.metadata().ok())
+                .map(|m| m.len())
+                .reduce(|a, b| a + b)
+        });
+
+        Ok(RepositoryMetadata {
+            url: remote_url.clone().unwrap_or_default(),
+            default_branch,
+            branches,
+            size,
+            last_commit,
+            remote_url,
+        })
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -388,7 +626,7 @@ impl FilterStats {
 }
 
 pub fn is_remote_url(source: &str) -> bool {
-    source.starts_with("https://github.com/") 
+    source.starts_with("https://github.com/")
         || source.starts_with("https://gitlab.com/")
         || source.starts_with("https://gist.github.com/")
         || source.starts_with("https://raw.githubusercontent.com/")
@@ -414,31 +652,33 @@ pub enum GitHubUrlType {
     Commit,
     Gist,
     GistRaw,
+    Compare,
 }
 
 pub fn parse_github_url(url: &str) -> Option<ParsedGitHubUrl> {
     let url = url.trim().trim_end_matches('/');
-    
+
     // Gist URLs
     if url.contains("gist.github.com") {
         return parse_gist_url(url);
     }
-    
+
     // Raw content URLs
     if url.contains("raw.githubusercontent.com") {
         return parse_raw_url(url);
     }
-    
+
     // Standard GitHub URLs
-    if let Some(path) = url.strip_prefix("https://github.com/")
+    if let Some(path) = url
+        .strip_prefix("https://github.com/")
         .or_else(|| url.strip_prefix("http://github.com/"))
-        .or_else(|| url.strip_prefix("github.com/")) {
-        
+        .or_else(|| url.strip_prefix("github.com/"))
+    {
         let parts: Vec<&str> = path.split('/').collect();
         if parts.len() >= 2 {
             let owner = parts[0].to_string();
             let repo = parts[1].to_string();
-            
+
             // Just owner/repo
             if parts.len() == 2 {
                 return Some(ParsedGitHubUrl {
@@ -450,16 +690,42 @@ pub fn parse_github_url(url: &str) -> Option<ParsedGitHubUrl> {
                     canonical_url: format!("https://github.com/{}/{}", owner, repo),
                 });
             }
-            
+
             // Handle different patterns
             if parts.len() >= 4 {
                 match parts[2] {
                     "tree" => {
-                        let branch = parts[3].to_string();
-                        let path = if parts.len() > 4 {
-                            Some(parts[4..].join("/"))
-                        } else { None };
+                        // Handle branches with slashes (e.g., fix/sql-injection)
+                        let all_parts = &parts[3..];
+                        if all_parts.is_empty() {
+                            return None;
+                        }
                         
+                        // Try to detect where the file path starts
+                        let mut branch_end_idx = all_parts.len();
+                        
+                        for (i, part) in all_parts.iter().enumerate() {
+                            // Files with extensions (but not .git)
+                            if part.contains('.') && !part.ends_with(".git") {
+                                branch_end_idx = i;
+                                break;
+                            }
+                            // Common directory names that indicate file paths
+                            if matches!(*part, "src" | "lib" | "test" | "tests" | "docs" | 
+                                               "bin" | "pkg" | "cmd" | "internal" | "api" | 
+                                               "web" | "client" | "server" | "assets" | "public") {
+                                branch_end_idx = i;
+                                break;
+                            }
+                        }
+                        
+                        let branch = all_parts[..branch_end_idx].join("/");
+                        let path = if branch_end_idx < all_parts.len() {
+                            Some(all_parts[branch_end_idx..].join("/"))
+                        } else {
+                            None
+                        };
+
                         return Some(ParsedGitHubUrl {
                             owner: owner.clone(),
                             repo: repo.clone(),
@@ -468,13 +734,36 @@ pub fn parse_github_url(url: &str) -> Option<ParsedGitHubUrl> {
                             url_type: GitHubUrlType::Tree,
                             canonical_url: format!("https://github.com/{}/{}", owner, repo),
                         });
-                    },
+                    }
                     "blob" => {
-                        let branch = parts[3].to_string();
-                        let path = if parts.len() > 4 {
-                            Some(parts[4..].join("/"))
-                        } else { None };
+                        // Same logic for blob URLs
+                        let all_parts = &parts[3..];
+                        if all_parts.is_empty() {
+                            return None;
+                        }
                         
+                        let mut branch_end_idx = all_parts.len();
+                        
+                        for (i, part) in all_parts.iter().enumerate() {
+                            if part.contains('.') && !part.ends_with(".git") {
+                                branch_end_idx = i;
+                                break;
+                            }
+                            if matches!(*part, "src" | "lib" | "test" | "tests" | "docs" | 
+                                               "bin" | "pkg" | "cmd" | "internal" | "api" | 
+                                               "web" | "client" | "server" | "assets" | "public") {
+                                branch_end_idx = i;
+                                break;
+                            }
+                        }
+                        
+                        let branch = all_parts[..branch_end_idx].join("/");
+                        let path = if branch_end_idx < all_parts.len() {
+                            Some(all_parts[branch_end_idx..].join("/"))
+                        } else {
+                            None
+                        };
+
                         return Some(ParsedGitHubUrl {
                             owner: owner.clone(),
                             repo: repo.clone(),
@@ -483,13 +772,15 @@ pub fn parse_github_url(url: &str) -> Option<ParsedGitHubUrl> {
                             url_type: GitHubUrlType::Blob,
                             canonical_url: format!("https://github.com/{}/{}", owner, repo),
                         });
-                    },
+                    }
                     "raw" => {
                         let branch = parts[3].to_string();
                         let path = if parts.len() > 4 {
                             Some(parts[4..].join("/"))
-                        } else { None };
-                        
+                        } else {
+                            None
+                        };
+
                         return Some(ParsedGitHubUrl {
                             owner: owner.clone(),
                             repo: repo.clone(),
@@ -498,10 +789,10 @@ pub fn parse_github_url(url: &str) -> Option<ParsedGitHubUrl> {
                             url_type: GitHubUrlType::Raw,
                             canonical_url: format!("https://github.com/{}/{}", owner, repo),
                         });
-                    },
+                    }
                     "commit" => {
                         let commit = parts[3].to_string();
-                        
+
                         return Some(ParsedGitHubUrl {
                             owner: owner.clone(),
                             repo: repo.clone(),
@@ -510,11 +801,11 @@ pub fn parse_github_url(url: &str) -> Option<ParsedGitHubUrl> {
                             url_type: GitHubUrlType::Commit,
                             canonical_url: format!("https://github.com/{}/{}", owner, repo),
                         });
-                    },
+                    }
                     _ => {}
                 }
             }
-            
+
             // Handle /tree/{branch} without path
             if parts.len() == 4 && parts[2] == "tree" {
                 return Some(ParsedGitHubUrl {
@@ -526,25 +817,64 @@ pub fn parse_github_url(url: &str) -> Option<ParsedGitHubUrl> {
                     canonical_url: format!("https://github.com/{}/{}", owner, repo),
                 });
             }
+
+            if parts.len() >= 4 && parts[2] == "compare" {
+                let compare_spec = parts[3..].join("/");
+
+                return Some(ParsedGitHubUrl {
+                    owner: owner.clone(),
+                    repo: repo.clone(),
+                    branch: Some(compare_spec),
+                    path: None,
+                    url_type: GitHubUrlType::Compare,
+                    canonical_url: format!("https://github.com/{}/{}", owner, repo),
+                });
+            }
+        }
+    }
+
+    None
+}
+
+pub fn normalize_source_url(
+    source: &str,
+    branch: Option<String>,
+    path_prefix: Option<String>,
+) -> Result<(String, Option<String>, Option<String>), String> {
+    // handle GitHub URLs and shorthand
+    if let Some(parsed) = parse_github_url(source) {
+        let final_branch = branch.or(parsed.branch);
+        let final_path = path_prefix.or(parsed.path);
+        return Ok((parsed.canonical_url, final_branch, final_path));
+    }
+    
+    // handle GitHub shorthand (owner/repo)
+    if !source.contains("://") && source.matches('/').count() == 1 {
+        let parts: Vec<&str> = source.split('/').collect();
+        if parts.len() == 2 && validate_github_name(parts[0]) && validate_github_name(parts[1]) {
+            let url = format!("https://github.com/{}/{}", parts[0], parts[1]);
+            return Ok((url, branch, path_prefix));
         }
     }
     
-    None
+    // regular URL or local path
+    Ok((source.to_string(), branch, path_prefix))
 }
 
 fn parse_gist_url(url: &str) -> Option<ParsedGitHubUrl> {
     // Handle gist.githubusercontent.com/{user}/{gist_id}/raw/{revision}/{filename}
     if url.contains("gist.githubusercontent.com") {
-        let path = url.strip_prefix("https://gist.githubusercontent.com/")
+        let path = url
+            .strip_prefix("https://gist.githubusercontent.com/")
             .or_else(|| url.strip_prefix("http://gist.githubusercontent.com/"))?;
-        
+
         let parts: Vec<&str> = path.split('/').collect();
         if parts.len() >= 2 {
             let owner = parts[0].to_string();
             let gist_id = parts[1].to_string();
             let revision = parts.get(3).map(|s| s.to_string());
             let filename = parts.get(4).map(|s| s.to_string());
-            
+
             return Some(ParsedGitHubUrl {
                 owner: owner.clone(),
                 repo: gist_id.clone(),
@@ -555,13 +885,14 @@ fn parse_gist_url(url: &str) -> Option<ParsedGitHubUrl> {
             });
         }
     }
-    
+
     // Handle gist.github.com/{user}/{gist_id} and gist.github.com/{gist_id}
-    if let Some(path) = url.strip_prefix("https://gist.github.com/")
-        .or_else(|| url.strip_prefix("http://gist.github.com/")) {
-        
+    if let Some(path) = url
+        .strip_prefix("https://gist.github.com/")
+        .or_else(|| url.strip_prefix("http://gist.github.com/"))
+    {
         let parts: Vec<&str> = path.split('/').collect();
-        
+
         // Anonymous gist (just ID)
         if parts.len() == 1 {
             return Some(ParsedGitHubUrl {
@@ -573,7 +904,7 @@ fn parse_gist_url(url: &str) -> Option<ParsedGitHubUrl> {
                 canonical_url: format!("https://gist.github.com/{}", parts[0]),
             });
         }
-        
+
         // User gist
         if parts.len() >= 2 {
             return Some(ParsedGitHubUrl {
@@ -586,15 +917,16 @@ fn parse_gist_url(url: &str) -> Option<ParsedGitHubUrl> {
             });
         }
     }
-    
+
     None
 }
 
 fn parse_raw_url(url: &str) -> Option<ParsedGitHubUrl> {
     // raw.githubusercontent.com/{user}/{repo}/{branch}/{path}
-    let path = url.strip_prefix("https://raw.githubusercontent.com/")
+    let path = url
+        .strip_prefix("https://raw.githubusercontent.com/")
         .or_else(|| url.strip_prefix("http://raw.githubusercontent.com/"))?;
-    
+
     let parts: Vec<&str> = path.split('/').collect();
     if parts.len() >= 3 {
         let owner = parts[0].to_string();
@@ -602,8 +934,10 @@ fn parse_raw_url(url: &str) -> Option<ParsedGitHubUrl> {
         let branch = parts[2].to_string();
         let path = if parts.len() > 3 {
             Some(parts[3..].join("/"))
-        } else { None };
-        
+        } else {
+            None
+        };
+
         return Some(ParsedGitHubUrl {
             owner: owner.clone(),
             repo: repo.clone(),
@@ -613,7 +947,7 @@ fn parse_raw_url(url: &str) -> Option<ParsedGitHubUrl> {
             canonical_url: format!("https://github.com/{}/{}", owner, repo),
         });
     }
-    
+
     None
 }
 
@@ -637,7 +971,9 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
     callbacks.credentials(|url, username_from_url, allowed_types| {
         // Security: Validate URL to prevent credential theft
         if !is_remote_url(url) {
-            return Err(git2::Error::from_str("Invalid URL for credential authentication"));
+            return Err(git2::Error::from_str(
+                "Invalid URL for credential authentication",
+            ));
         }
 
         if allowed_types.contains(git2::CredentialType::SSH_KEY) {
@@ -672,7 +1008,9 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
                 use std::os::unix::fs::PermissionsExt;
                 let perms = metadata.permissions().mode();
                 if (perms & 0o777) != 0o700 {
-                    return Err(git2::Error::from_str("SSH directory has insecure permissions"));
+                    return Err(git2::Error::from_str(
+                        "SSH directory has insecure permissions",
+                    ));
                 }
             }
 
@@ -731,7 +1069,9 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
             return git2::Cred::default();
         }
 
-        Err(git2::Error::from_str("No secure authentication method available"))
+        Err(git2::Error::from_str(
+            "No secure authentication method available",
+        ))
     });
 
     // Only show progress in TTY (CLI mode)
@@ -863,139 +1203,6 @@ pub trait IngestionCallback: Send + Sync {
     fn on_error(&mut self, _error: &str) {}
 }
 
-impl Ingester {
-    /// Ingest with progress callbacks (for WebSocket streaming)
-    pub fn ingest_with_callback<W: Write, C: IngestionCallback>(
-        &self,
-        output: &mut W,
-        callback: &mut C,
-    ) -> Result<()> {
-        callback.on_progress("starting", "Beginning ingestion");
-        
-        let workdir = self
-            .repo
-            .workdir()
-            .context("Repository has no working directory")?;
-
-        let head_result = self.repo.head();
-        let has_commits = head_result.is_ok();
-
-        let mut files: Vec<PathBuf> = Vec::new();
-
-        callback.on_progress("scanning", "Scanning repository files");
-
-        if has_commits {
-            let head = head_result?;
-            let tree = head.peel_to_tree()?;
-
-            // If path_prefix is specified, get the subtree
-            let tree_to_walk = if let Some(prefix) = &self.options.path_prefix {
-                match tree.get_path(Path::new(prefix)) {
-                    Ok(entry) => self.repo.find_tree(entry.id())?,
-                    Err(_) => {
-                        callback.on_error(&format!("Path '{}' not found", prefix));
-                        return Ok(());
-                    }
-                }
-            } else {
-                tree
-            };
-
-            tree_to_walk.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
-                if entry.kind() == Some(git2::ObjectType::Blob) {
-                    if let Some(name) = entry.name() {
-                        let path = if dir.is_empty() {
-                            PathBuf::from(name)
-                        } else {
-                            PathBuf::from(dir).join(name)
-                        };
-                        // Add the prefix back to the path for display
-                        let path = if let Some(prefix) = &self.options.path_prefix {
-                            PathBuf::from(prefix).join(path)
-                        } else {
-                            path
-                        };
-                        files.push(path);
-                    }
-                }
-                git2::TreeWalkResult::Ok
-            })?;
-        }
-
-        if self.options.include_untracked || !has_commits {
-            let mut status_opts = StatusOptions::new();
-            status_opts.include_untracked(true);
-            status_opts.include_ignored(false);
-
-            let statuses = self.repo.statuses(Some(&mut status_opts))?;
-
-            for status in statuses.iter() {
-                if status.status().contains(Status::WT_NEW) {
-                    if let Some(path) = status.path() {
-                        let path_buf = PathBuf::from(path);
-                        // Apply path prefix filter
-                        if let Some(prefix) = &self.options.path_prefix {
-                            if !path.starts_with(prefix) {
-                                continue;
-                            }
-                        }
-                        files.push(path_buf);
-                    }
-                }
-            }
-        }
-
-        files.sort();
-        files.dedup();
-
-        callback.on_progress("processing", &format!("Processing {} files", files.len()));
-
-        let mut processed = 0;
-        let mut total_bytes = 0;
-        
-        for file in files {
-            let full_path = workdir.join(&file);
-
-            if !full_path.exists() || !full_path.is_file() {
-                continue;
-            }
-
-            if !self.should_include(&file)? {
-                continue;
-            }
-
-            if let Ok(metadata) = std::fs::metadata(&full_path) {
-                if metadata.len() > self.options.max_file_size as u64 {
-                    continue;
-                }
-                
-                let content = std::fs::read_to_string(&full_path)
-                    .unwrap_or_else(|_| "[Binary file]".to_string());
-
-                // Write to output
-                writeln!(output, "=== {} ===", file.display())?;
-                writeln!(output, "{content}")?;
-                writeln!(output)?;
-
-                // Callback for streaming
-                callback.on_file(&file, &content);
-
-                total_bytes += content.len();
-                processed += 1;
-            }
-        }
-
-        if processed == 0 {
-            callback.on_error("No files found to ingest");
-            eprintln!("Warning: No files found to ingest");
-        } else {
-            callback.on_complete(processed, total_bytes);
-        }
-
-        Ok(())
-    }
-}
-
 // Repository metadata extraction
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepositoryMetadata {
@@ -1005,63 +1212,6 @@ pub struct RepositoryMetadata {
     pub size: Option<u64>,
     pub last_commit: Option<String>,
     pub remote_url: Option<String>,
-}
-
-impl Ingester {
-    /// Extract metadata about the repository
-    pub fn get_metadata(&self) -> Result<RepositoryMetadata> {
-        let repo = &self.repo;
-        
-        // Get default branch
-        let default_branch = repo.head()
-            .ok()
-            .and_then(|h| h.shorthand().map(String::from))
-            .unwrap_or_else(|| "main".to_string());
-
-        // Get all branches
-        let mut branches = Vec::new();
-        for branch_result in repo.branches(Some(git2::BranchType::Local))? {
-            if let Ok((branch, _)) = branch_result {
-                if let Ok(Some(name)) = branch.name() {
-                    branches.push(name.to_string());
-                }
-            }
-        }
-
-        // Get remote URL
-        let remote_url = repo.find_remote("origin")
-            .ok()
-            .and_then(|r| r.url().map(String::from));
-
-        // Get last commit info
-        let last_commit = repo.head()
-            .ok()
-            .and_then(|h| h.peel_to_commit().ok())
-            .map(|c| {
-                format!("{} - {}", 
-                    c.id().to_string().chars().take(8).collect::<String>(),
-                    c.summary().unwrap_or("No message")
-                )
-            });
-
-        // Calculate repo size (approximate)
-        let size = repo.workdir()
-            .and_then(|w| walkdir::WalkDir::new(w)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter_map(|e| e.metadata().ok())
-                .map(|m| m.len())
-                .reduce(|a, b| a + b));
-
-        Ok(RepositoryMetadata {
-            url: remote_url.clone().unwrap_or_default(),
-            default_branch,
-            branches,
-            size,
-            last_commit,
-            remote_url,
-        })
-    }
 }
 
 #[cfg(test)]
@@ -1101,13 +1251,23 @@ mod tests {
         assert_eq!(parsed.path, Some("src/lib".to_string()));
         assert_eq!(parsed.url_type, GitHubUrlType::Tree);
 
+        // Tree with branch containing slash
+        let parsed = parse_github_url("https://github.com/owner/repo/tree/fix/sql-injection").unwrap();
+        assert_eq!(parsed.owner, "owner");
+        assert_eq!(parsed.repo, "repo");
+        assert_eq!(parsed.branch, Some("fix/sql-injection".to_string()));
+        assert_eq!(parsed.path, None);
+        assert_eq!(parsed.url_type, GitHubUrlType::Tree);
+
         // Blob
-        let parsed = parse_github_url("https://github.com/owner/repo/blob/master/README.md").unwrap();
+        let parsed =
+            parse_github_url("https://github.com/owner/repo/blob/master/README.md").unwrap();
         assert_eq!(parsed.url_type, GitHubUrlType::Blob);
         assert_eq!(parsed.path, Some("README.md".to_string()));
 
         // Raw
-        let parsed = parse_github_url("https://raw.githubusercontent.com/owner/repo/main/file.txt").unwrap();
+        let parsed =
+            parse_github_url("https://raw.githubusercontent.com/owner/repo/main/file.txt").unwrap();
         assert_eq!(parsed.url_type, GitHubUrlType::Raw);
         assert_eq!(parsed.branch, Some("main".to_string()));
         assert_eq!(parsed.path, Some("file.txt".to_string()));

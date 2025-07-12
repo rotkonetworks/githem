@@ -362,7 +362,7 @@ impl FilterConfig {
     /// Build the default excludes from all categories
     fn build_default_excludes(&mut self) {
         let mut excludes = Vec::new();
-        
+
         excludes.extend(self.categories.lock_files.clone());
         excludes.extend(self.categories.dependencies.clone());
         excludes.extend(self.categories.build_artifacts.clone());
@@ -377,11 +377,11 @@ impl FilterConfig {
         excludes.extend(self.categories.os_files.clone());
         excludes.extend(self.categories.version_control.clone());
         excludes.extend(self.categories.secrets.clone());
-        
+
         // Remove duplicates
         excludes.sort();
         excludes.dedup();
-        
+
         self.default_excludes = excludes;
     }
 
@@ -406,7 +406,7 @@ impl FilterConfig {
                 excludes.extend(self.categories.os_files.clone());
                 excludes.extend(self.categories.version_control.clone());
                 excludes.extend(self.categories.secrets.clone());
-                
+
                 // For code-only, also exclude common non-code files
                 excludes.extend(vec![
                     "*.md".to_string(),
@@ -420,7 +420,7 @@ impl FilterConfig {
                     "CREDITS*".to_string(),
                     "NOTICE*".to_string(),
                 ]);
-                
+
                 excludes
             }
             FilterPreset::Minimal => {
@@ -439,7 +439,7 @@ impl FilterConfig {
     /// Get excludes for specific categories
     pub fn get_excludes_for_categories(&self, categories: &[&str]) -> Vec<String> {
         let mut excludes = Vec::new();
-        
+
         for category in categories {
             match *category {
                 "lock_files" => excludes.extend(self.categories.lock_files.clone()),
@@ -459,7 +459,7 @@ impl FilterConfig {
                 _ => {} // Unknown category, skip
             }
         }
-        
+
         // Remove duplicates
         excludes.sort();
         excludes.dedup();
@@ -475,7 +475,7 @@ impl FilterConfig {
     pub fn get_category_names(&self) -> Vec<&'static str> {
         vec![
             "lock_files",
-            "dependencies", 
+            "dependencies",
             "build_artifacts",
             "ide_files",
             "media_files",
@@ -520,23 +520,25 @@ mod tests {
         let config = FilterConfig::new();
         assert!(!config.default_excludes.is_empty());
         assert!(config.default_excludes.contains(&"*.lock".to_string()));
-        assert!(config.default_excludes.contains(&"node_modules/*".to_string()));
+        assert!(config
+            .default_excludes
+            .contains(&"node_modules/*".to_string()));
     }
 
     #[test]
     fn test_presets() {
         let config = FilterConfig::new();
-        
+
         let raw = config.get_excludes_for_preset(FilterPreset::Raw);
         assert!(raw.is_empty());
-        
+
         let standard = config.get_excludes_for_preset(FilterPreset::Standard);
         assert!(!standard.is_empty());
-        
+
         let minimal = config.get_excludes_for_preset(FilterPreset::Minimal);
         assert!(!minimal.is_empty());
         assert!(minimal.len() < standard.len());
-        
+
         let code_only = config.get_excludes_for_preset(FilterPreset::CodeOnly);
         assert!(!code_only.is_empty());
         assert!(code_only.contains(&"*.md".to_string()));
@@ -548,7 +550,7 @@ mod tests {
         let media_excludes = config.get_excludes_for_categories(&["media_files"]);
         assert!(media_excludes.contains(&"*.png".to_string()));
         assert!(media_excludes.contains(&"*.mp4".to_string()));
-        
+
         let multiple = config.get_excludes_for_categories(&["lock_files", "cache"]);
         assert!(multiple.contains(&"*.lock".to_string()));
         assert!(multiple.contains(&".cache/*".to_string()));

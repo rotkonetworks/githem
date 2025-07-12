@@ -1,10 +1,11 @@
 use githem_core::{
-    IngestOptions, Ingester, parse_github_url, is_remote_url,
-    GitHubUrlType, IngestionCallback, FilterPreset, FilterStats
+    IngestOptions, Ingester, normalize_source_url, is_remote_url,
+    IngestionCallback, FilterPreset, FilterStats
 };
+
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestionParams {
@@ -62,6 +63,34 @@ pub struct RepositoryMetadata {
 pub struct IngestionService;
 
 impl IngestionService {
+     pub async fn generate_diff(
+        url: &str,
+        base: &str,
+        head: &str,
+        include_patterns: Option<&str>,
+        exclude_patterns: Option<&str>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // clone the repository temporarily
+        let options = IngestOptions::default();
+        let ingester = if is_remote_url(url) {
+            Ingester::from_url(url, options)?
+        } else {
+            return Err("Diff generation requires a remote URL".into());
+        };
+        
+        // apply filters if provided
+        if let Some(include) = include_patterns {
+            // TODO: Apply include patterns to diff
+        }
+        if let Some(exclude) = exclude_patterns {
+            // TODO: Apply exclude patterns to diff
+        }
+        
+        // Generate the diff
+        let diff_content = ingester.generate_diff(base, head)?;
+        Ok(diff_content)
+    }
+
     pub fn validate_github_name(name: &str) -> bool {
         !name.is_empty()
             && name.len() <= 39
@@ -102,26 +131,29 @@ impl IngestionService {
         content.matches("=== ").count()
     }
 
-    pub fn normalize_params(mut params: IngestionParams) -> Result<IngestionParams, String> {
+    pub fn normalize_params(params: IngestionParams) -> Result<IngestionParams, String> {
         if params.url.is_empty() {
             return Err("URL is required".to_string());
         }
 
-        if let Some(parsed) = parse_github_url(&params.url) {
-            params.url = if parsed.url_type == GitHubUrlType::Gist {
-                parsed.canonical_url
-            } else {
-                format!("https://github.com/{}/{}", parsed.owner, parsed.repo)
-            };
-            params.branch = parsed.branch.or(params.branch);
-            params.path_prefix = parsed.path.or(params.path_prefix);
-        }
+        // Use the same normalization logic as CLI
+        let (normalized_url, final_branch, final_path_prefix) = 
+            normalize_source_url(&params.url, params.branch.clone(), params.path_prefix.clone())?;
 
-        if !is_remote_url(&params.url) && !std::path::Path::new(&params.url).exists() {
+        if !is_remote_url(&normalized_url) && !std::path::Path::new(&normalized_url).exists() {
             return Err("Invalid URL or path".to_string());
         }
 
-        Ok(params)
+        Ok(IngestionParams {
+            url: normalized_url,
+            branch: final_branch,
+            path_prefix: final_path_prefix,
+            include_patterns: params.include_patterns,
+            exclude_patterns: params.exclude_patterns,
+            max_file_size: params.max_file_size,
+            filter_preset: params.filter_preset,
+            raw: params.raw,
+        })
     }
 
     pub fn parse_filter_preset(preset_str: Option<&str>) -> Option<FilterPreset> {
@@ -134,7 +166,9 @@ impl IngestionService {
         })
     }
 
-    pub async fn ingest(params: IngestionParams) -> Result<IngestionResult, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn ingest(
+        params: IngestionParams,
+    ) -> Result<IngestionResult, Box<dyn std::error::Error + Send + Sync>> {
         let params = Self::normalize_params(params)?;
 
         // Determine filter preset
@@ -222,9 +256,9 @@ impl IngestionService {
 pub struct WebSocketCallback<F>
 where
     F: FnMut(WebSocketMessage),
-{
-    pub send_fn: F,
-}
+    {
+        pub send_fn: F,
+    }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
@@ -234,33 +268,33 @@ pub enum WebSocketMessage {
     Complete { files: usize, bytes: usize },
     Error { message: String },
     FilterStats { stats: FilterStats },
-}
+    }
 
 impl<F> IngestionCallback for WebSocketCallback<F>
-where
-    F: FnMut(WebSocketMessage) + Send + Sync,
-{
-    fn on_progress(&mut self, stage: &str, message: &str) {
-        (self.send_fn)(WebSocketMessage::Progress {
-            stage: stage.to_string(),
-            message: message.to_string(),
-        });
-    }
+    where
+        F: FnMut(WebSocketMessage) + Send + Sync,
+        {
+            fn on_progress(&mut self, stage: &str, message: &str) {
+                (self.send_fn)(WebSocketMessage::Progress {
+                    stage: stage.to_string(),
+                    message: message.to_string(),
+                });
+            }
 
-    fn on_file(&mut self, path: &Path, content: &str) {
-        (self.send_fn)(WebSocketMessage::File {
-            path: path.display().to_string(),
-            content: content.to_string(),
-        });
-    }
+            fn on_file(&mut self, path: &Path, content: &str) {
+                (self.send_fn)(WebSocketMessage::File {
+                    path: path.display().to_string(),
+                    content: content.to_string(),
+                });
+            }
 
-    fn on_complete(&mut self, files: usize, bytes: usize) {
-        (self.send_fn)(WebSocketMessage::Complete { files, bytes });
-    }
+            fn on_complete(&mut self, files: usize, bytes: usize) {
+                (self.send_fn)(WebSocketMessage::Complete { files, bytes });
+            }
 
-    fn on_error(&mut self, error: &str) {
-        (self.send_fn)(WebSocketMessage::Error {
-            message: error.to_string(),
-        });
-    }
-}
+            fn on_error(&mut self, error: &str) {
+                (self.send_fn)(WebSocketMessage::Error {
+                    message: error.to_string(),
+                });
+            }
+        }

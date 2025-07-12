@@ -1,0 +1,19 @@
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./install.sh:/usr/share/nginx/html/install.sh:ro
+      - ./install/install.ps1:/usr/share/nginx/html/install.ps1:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    environment:
+      - NGINX_HOST=get.githem.com
+      - NGINX_PORT=80

@@ -1,13 +1,13 @@
-use crate::ingestion::{IngestionService, IngestionParams, WebSocketMessage};
+use crate::ingestion::{IngestionParams, IngestionService, WebSocketMessage};
 use anyhow::Result;
 use axum::{
-    Router,
     extract::{
-        Query,
         ws::{Message, WebSocket, WebSocketUpgrade},
+        Query,
     },
     response::IntoResponse,
     routing::get,
+    Router,
 };
 use serde::Deserialize;
 use std::net::SocketAddr;
@@ -51,7 +51,8 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
                 stage: "starting".to_string(),
                 message: format!("Processing {}", params.url),
             })
-            .unwrap().into(),
+            .unwrap()
+            .into(),
         ))
         .await
     {
@@ -76,7 +77,8 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
                 stage: "cloning".to_string(),
                 message: "Cloning repository...".to_string(),
             })
-            .unwrap().into(),
+            .unwrap()
+            .into(),
         ))
         .await
     {
@@ -92,7 +94,8 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
                         stage: "ingesting".to_string(),
                         message: "Processing files...".to_string(),
                     })
-                    .unwrap().into(),
+                    .unwrap()
+                    .into(),
                 ))
                 .await
             {
@@ -107,7 +110,8 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
                         serde_json::to_string(&WebSocketMessage::FilterStats {
                             stats: stats.clone(),
                         })
-                        .unwrap().into(),
+                        .unwrap()
+                        .into(),
                     ))
                     .await;
             }
@@ -118,7 +122,8 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
                         path: "all_files.txt".to_string(),
                         content: result.content,
                     })
-                    .unwrap().into(),
+                    .unwrap()
+                    .into(),
                 ))
                 .await;
 
@@ -128,7 +133,8 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
                         files: result.summary.files_analyzed,
                         bytes: result.summary.total_size,
                     })
-                    .unwrap().into(),
+                    .unwrap()
+                    .into(),
                 ))
                 .await;
 
@@ -140,7 +146,8 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
                     serde_json::to_string(&WebSocketMessage::Error {
                         message: format!("Failed: {e}"),
                     })
-                    .unwrap().into(),
+                    .unwrap()
+                    .into(),
                 ))
                 .await;
         }
