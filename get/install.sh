@@ -41,7 +41,6 @@ is_windows() {
 
 run_powershell_installer() {
     echo "Windows detected. Running PowerShell installer..."
-    
     if command -v powershell >/dev/null 2>&1; then
         powershell -Command "& {Set-ExecutionPolicy Bypass -Scope Process -Force; iwr -useb get.githem.com/install.ps1 | iex}"
     elif command -v pwsh >/dev/null 2>&1; then
@@ -56,10 +55,8 @@ run_powershell_installer() {
 download_verify() {
     url="$1"
     dest="$2"
-    
     echo "Downloading $url..."
     curl -sSL "$url" -o "$dest"
-    
     if command -v sha512sum >/dev/null 2>&1; then
         curl -sSL "$url.sha512" -o "$dest.sha512" 2>/dev/null && {
             echo "Verifying checksum..."
@@ -72,22 +69,47 @@ download_verify() {
 install_unix() {
     platform="$1"
     arch="$2"
-    
     VERSION=$(get_latest_version)
     if [ -z "$VERSION" ]; then
         echo "Failed to fetch latest version"
         exit 1
     fi
-    
     BASE_URL="https://github.com/rotkonetworks/githem/releases/download/v${VERSION}"
-    
     case "$platform" in
         arch)
-            echo "Arch Linux detected. Installing to /usr/local/bin..."
-            binary="githem-linux-$arch"
-            download_verify "$BASE_URL/$binary" "/tmp/$binary"
-            sudo install -m 755 "/tmp/$binary" /usr/local/bin/githem
-            rm -f "/tmp/$binary"
+            echo "Arch Linux detected."
+            # check for aur helper
+            if command -v yay >/dev/null 2>&1 || command -v paru >/dev/null 2>&1; then
+                echo "AUR helper found. You can install githem from AUR:"
+                echo "  yay -S githem-cli"
+                echo "  # or"
+                echo "  paru -S githem-cli"
+                echo ""
+                echo "Install from AUR? (recommended) [Y/n]"
+                read -r response
+                case "$response" in
+                    [nN][oO]|[nN])
+                        echo "Installing binary to /usr/local/bin..."
+                        binary="githem-linux-$arch"
+                        download_verify "$BASE_URL/$binary" "/tmp/$binary"
+                        sudo install -m 755 "/tmp/$binary" /usr/local/bin/githem
+                        rm -f "/tmp/$binary"
+                        ;;
+                    *)
+                        if command -v yay >/dev/null 2>&1; then
+                            yay -S githem-cli
+                        elif command -v paru >/dev/null 2>&1; then
+                            paru -S githem-cli
+                        fi
+                        ;;
+                esac
+            else
+                echo "Installing binary to /usr/local/bin..."
+                binary="githem-linux-$arch"
+                download_verify "$BASE_URL/$binary" "/tmp/$binary"
+                sudo install -m 755 "/tmp/$binary" /usr/local/bin/githem
+                rm -f "/tmp/$binary"
+            fi
             ;;
         nixos)
             echo "NixOS detected. Installing to ~/.local/bin..."
@@ -114,7 +136,6 @@ install_unix() {
             rm -f "/tmp/$binary"
             ;;
     esac
-    
     echo "Installation complete. Run 'githem --version' to verify."
 }
 
@@ -123,19 +144,15 @@ main() {
         run_powershell_installer
         return
     fi
-    
     platform=$(detect_platform)
     arch=$(detect_arch)
-    
     if [ "$platform" = "unsupported" ] || [ "$arch" = "unsupported" ]; then
         echo "Unsupported OS/architecture combination"
         echo "Detected: $(uname -s) $(uname -m)"
         exit 1
     fi
-    
     echo "Detected: $platform ($arch)"
     echo "Installing githem..."
-    
     install_unix "$platform" "$arch"
 }
 

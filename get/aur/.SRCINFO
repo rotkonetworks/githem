@@ -1,0 +1,21 @@
+pkgbase = githem-cli
+	pkgdesc = GitHem CLI tool for managing Git repositories
+	pkgver = 0.3.2
+	pkgrel = 1
+	url = https://github.com/rotkonetworks/githem
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	provides = githem
+	conflicts = githem
+	conflicts = githem-bin
+	source_x86_64 = https://github.com/rotkonetworks/githem/releases/download/v0.3.2/githem-linux-x64
+	source_x86_64 = https://github.com/rotkonetworks/githem/releases/download/v0.3.2/githem-linux-x64.sha512
+	sha256sums_x86_64 = badc82cbd984580a1cf326c45b5b13de4a55dae145b0d2e743d0d17712a59ce1
+	sha256sums_x86_64 = bcd2575ea16b4bd88e6193865f4e59021861f41c705a25b317b69e2c977d1136
+	source_aarch64 = https://github.com/rotkonetworks/githem/releases/download/v0.3.2/githem-linux-arm64
+	source_aarch64 = https://github.com/rotkonetworks/githem/releases/download/v0.3.2/githem-linux-arm64.sha512
+	sha256sums_aarch64 = e8b9b273eb2e108dddc2905c7a9eaf4ee3c85b3779af12b1d731b816c6785bf4
+	sha256sums_aarch64 = d58c9f187313ae068b6a81fd20436fa2d82fa34af3f28297438b1c365595a8d2
+
+pkgname = githem-cli
