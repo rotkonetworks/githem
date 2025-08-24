@@ -1,0 +1,48 @@
+name: Deploy get.githem.com
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'get/**'
+  workflow_dispatch:
+
+env:
+  DEPLOY_DIR: get.githem.com
+  SERVICE_PORT: 8080
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Deploy to server
+        env:
+          SSH_USER: ${{ secrets.SERVER_USER }}
+          SSH_HOST: ${{ secrets.SERVER_HOST }}
+        run: |
+          echo "${{ secrets.SSH_KEY }}" > ssh_key
+          chmod 600 ssh_key
+          
+          # Setup deployment directory
+          ssh -i ssh_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} \
+            "mkdir -p ~/${DEPLOY_DIR}"
+          
+          # Copy files to server
+          scp -i ssh_key -o StrictHostKeyChecking=no -r \
+            get/* \
+            ${SSH_USER}@${SSH_HOST}:~/${DEPLOY_DIR}/
+          
+          # Deploy the service
+          ssh -i ssh_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} << EOF
+            cd ~/${DEPLOY_DIR}
+            docker-compose down || true
+            docker-compose up -d
+            
+            # Health check
+            sleep 5
+            curl -f http://localhost:${SERVICE_PORT}/ || exit 1
+            echo "✓ ${DEPLOY_DIR} deployed successfully"
+          EOF
+          
+          rm ssh_key

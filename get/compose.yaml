@@ -8,6 +8,7 @@ services:
       - ./install.sh:/usr/share/nginx/html/install.sh:ro
       - ./install/install.ps1:/usr/share/nginx/html/install.ps1:ro
     restart: unless-stopped
+    container_name: githem-get
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://localhost/"]
       interval: 30s

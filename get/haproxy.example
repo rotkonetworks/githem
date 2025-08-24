@@ -1,0 +1,8 @@
+frontend https_front
+    bind *:443 ssl crt /etc/haproxy/certs/
+    acl is_get_githem hdr(host) -i get.githem.com
+    use_backend githem_get_backend if is_get_githem
+
+backend githem_get_backend
+    balance roundrobin
+    server githem_get 127.0.0.1:8080 check
