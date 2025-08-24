@@ -62,6 +62,7 @@ async fn handle_socket(mut socket: WebSocket, params: WsQuery) {
 
     let ingestion_params = IngestionParams {
         url: params.url.clone(),
+        subpath: None,
         branch: params.branch,
         path_prefix: None,
         include_patterns: params.include,

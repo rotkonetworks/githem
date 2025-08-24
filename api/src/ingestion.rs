@@ -1,6 +1,7 @@
 use githem_core::{
-    IngestOptions, Ingester, normalize_source_url, is_remote_url,
-    IngestionCallback, FilterPreset, FilterStats
+    IngestOptions, Ingester, is_remote_url,
+    IngestionCallback, FilterPreset, FilterStats,
+    normalize_source_url, estimate_tokens, count_files, generate_tree
 };
 
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct IngestionParams {
     pub url: String,
     pub branch: Option<String>,
+    pub subpath: Option<String>,
     pub path_prefix: Option<String>,
     #[serde(default)]
     pub include_patterns: Vec<String>,
@@ -18,10 +20,7 @@ pub struct IngestionParams {
     pub exclude_patterns: Vec<String>,
     #[serde(default = "default_max_file_size")]
     pub max_file_size: usize,
-    /// Filter preset to apply
-    #[serde(default)]
     pub filter_preset: Option<String>,
-    /// Whether to apply raw mode (no filtering)
     #[serde(default)]
     pub raw: bool,
 }
@@ -63,121 +62,17 @@ pub struct RepositoryMetadata {
 pub struct IngestionService;
 
 impl IngestionService {
-     pub async fn generate_diff(
-        url: &str,
-        base: &str,
-        head: &str,
-        include_patterns: Option<&str>,
-        exclude_patterns: Option<&str>,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        // clone the repository temporarily
-        let options = IngestOptions::default();
-        let ingester = if is_remote_url(url) {
-            Ingester::from_url(url, options)?
-        } else {
-            return Err("Diff generation requires a remote URL".into());
-        };
-        
-        // apply filters if provided
-        if let Some(include) = include_patterns {
-            // TODO: Apply include patterns to diff
-        }
-        if let Some(exclude) = exclude_patterns {
-            // TODO: Apply exclude patterns to diff
-        }
-        
-        // Generate the diff
-        let diff_content = ingester.generate_diff(base, head)?;
-        Ok(diff_content)
-    }
-
-    pub fn validate_github_name(name: &str) -> bool {
-        !name.is_empty()
-            && name.len() <= 39
-            && name
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
-            && !name.starts_with(['-', '.'])
-            && !name.ends_with(['-', '.'])
-    }
-
-    pub fn estimate_tokens(content: &str) -> usize {
-        let chars = content.len();
-        let words = content.split_whitespace().count();
-        let lines = content.lines().count();
-
-        let char_estimate = chars as f32 / 3.3;
-        let word_estimate = words as f32 * 0.75;
-        let line_penalty = lines as f32 * 0.1;
-
-        ((char_estimate + word_estimate) / 2.0 + line_penalty) as usize
-    }
-
-    pub fn generate_tree(content: &str) -> String {
-        let mut tree = String::new();
-        tree.push_str("Repository structure:\n");
-
-        for line in content.lines() {
-            if line.starts_with("=== ") && line.ends_with(" ===") {
-                let path = &line[4..line.len() - 4];
-                tree.push_str(&format!("📄 {path}\n"));
-            }
-        }
-
-        tree
-    }
-
-    pub fn count_files(content: &str) -> usize {
-        content.matches("=== ").count()
-    }
-
-    pub fn normalize_params(params: IngestionParams) -> Result<IngestionParams, String> {
-        if params.url.is_empty() {
-            return Err("URL is required".to_string());
-        }
-
-        // Use the same normalization logic as CLI
-        let (normalized_url, final_branch, final_path_prefix) = 
-            normalize_source_url(&params.url, params.branch.clone(), params.path_prefix.clone())?;
-
-        if !is_remote_url(&normalized_url) && !std::path::Path::new(&normalized_url).exists() {
-            return Err("Invalid URL or path".to_string());
-        }
-
-        Ok(IngestionParams {
-            url: normalized_url,
-            branch: final_branch,
-            path_prefix: final_path_prefix,
-            include_patterns: params.include_patterns,
-            exclude_patterns: params.exclude_patterns,
-            max_file_size: params.max_file_size,
-            filter_preset: params.filter_preset,
-            raw: params.raw,
-        })
-    }
-
-    pub fn parse_filter_preset(preset_str: Option<&str>) -> Option<FilterPreset> {
-        preset_str.and_then(|s| match s.to_lowercase().as_str() {
-            "raw" => Some(FilterPreset::Raw),
-            "standard" => Some(FilterPreset::Standard),
-            "code-only" | "code_only" | "codeonly" => Some(FilterPreset::CodeOnly),
-            "minimal" => Some(FilterPreset::Minimal),
-            _ => None,
-        })
-    }
-
     pub async fn ingest(
         params: IngestionParams,
     ) -> Result<IngestionResult, Box<dyn std::error::Error + Send + Sync>> {
         let params = Self::normalize_params(params)?;
 
-        // Determine filter preset
         let filter_preset = if params.raw {
             Some(FilterPreset::Raw)
         } else if let Some(preset) = Self::parse_filter_preset(params.filter_preset.as_deref()) {
             Some(preset)
         } else {
-            Some(FilterPreset::Standard) // Default to standard filtering
+            Some(FilterPreset::Standard)
         };
 
         let filter_preset_name = match filter_preset {
@@ -196,21 +91,25 @@ impl IngestionService {
             branch: params.branch.clone(),
             path_prefix: params.path_prefix.clone(),
             filter_preset,
-            apply_default_filters: false, // We use explicit presets
+            apply_default_filters: false,
         };
 
-        let ingester = if is_remote_url(&params.url) {
-            Ingester::from_url(&params.url, options)?
+        let mut ingester = if is_remote_url(&params.url) {
+            Ingester::from_url_cached(&params.url, options)?
         } else {
             let path = std::path::PathBuf::from(&params.url);
             Ingester::from_path(&path, options)?
         };
 
-        // Get filtering statistics
         let filter_stats = ingester.get_filter_stats().ok();
 
         let mut content = Vec::new();
-        ingester.ingest(&mut content)?;
+        if ingester.cache_key.is_some() {
+            ingester.ingest_cached(&mut content)?;
+        } else {
+            ingester.ingest(&mut content)?;
+        }
+        
         let content_str = String::from_utf8(content)?;
 
         let id = format!(
@@ -219,10 +118,10 @@ impl IngestionService {
             rand::random::<u32>()
         );
 
-        let tree = Self::generate_tree(&content_str);
-        let files_analyzed = Self::count_files(&content_str);
+        let tree = generate_tree(&content_str);
+        let files_analyzed = count_files(&content_str);
         let total_size = content_str.len();
-        let estimated_tokens = Self::estimate_tokens(&content_str);
+        let estimated_tokens = estimate_tokens(&content_str);
 
         let summary = IngestionSummary {
             repository: params.url.clone(),
@@ -251,14 +150,67 @@ impl IngestionService {
             filter_stats,
         })
     }
+    
+    pub fn normalize_params(params: IngestionParams) -> Result<IngestionParams, String> {
+        if params.url.is_empty() {
+            return Err("URL is required".to_string());
+        }
+
+        let (normalized_url, final_branch, final_path_prefix) = 
+            normalize_source_url(&params.url, params.branch.clone(), params.path_prefix.clone())?;
+
+        if !is_remote_url(&normalized_url) && !std::path::Path::new(&normalized_url).exists() {
+            return Err("Invalid URL or path".to_string());
+        }
+
+        Ok(IngestionParams {
+            url: normalized_url,
+            subpath: params.subpath,
+            branch: final_branch,
+            path_prefix: final_path_prefix,
+            include_patterns: params.include_patterns,
+            exclude_patterns: params.exclude_patterns,
+            max_file_size: params.max_file_size,
+            filter_preset: params.filter_preset,
+            raw: params.raw,
+        })
+    }
+
+    pub fn parse_filter_preset(preset_str: Option<&str>) -> Option<FilterPreset> {
+        preset_str.and_then(|s| match s.to_lowercase().as_str() {
+            "raw" => Some(FilterPreset::Raw),
+            "standard" => Some(FilterPreset::Standard),
+            "code-only" | "code_only" | "codeonly" => Some(FilterPreset::CodeOnly),
+            "minimal" => Some(FilterPreset::Minimal),
+            _ => None,
+        })
+    }
+
+    pub async fn generate_diff(
+        url: &str,
+        base: &str,
+        head: &str,
+        _include_patterns: Option<&str>,
+        _exclude_patterns: Option<&str>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let options = IngestOptions::default();
+        let ingester = if is_remote_url(url) {
+            Ingester::from_url(url, options)?
+        } else {
+            return Err("Diff generation requires a remote URL".into());
+        };
+        
+        let diff_content = ingester.generate_diff(base, head)?;
+        Ok(diff_content)
+    }
 }
 
 pub struct WebSocketCallback<F>
 where
     F: FnMut(WebSocketMessage),
-    {
-        pub send_fn: F,
-    }
+{
+    pub send_fn: F,
+}
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
@@ -268,33 +220,33 @@ pub enum WebSocketMessage {
     Complete { files: usize, bytes: usize },
     Error { message: String },
     FilterStats { stats: FilterStats },
-    }
+}
 
 impl<F> IngestionCallback for WebSocketCallback<F>
-    where
-        F: FnMut(WebSocketMessage) + Send + Sync,
-        {
-            fn on_progress(&mut self, stage: &str, message: &str) {
-                (self.send_fn)(WebSocketMessage::Progress {
-                    stage: stage.to_string(),
-                    message: message.to_string(),
-                });
-            }
+where
+    F: FnMut(WebSocketMessage) + Send + Sync,
+{
+    fn on_progress(&mut self, stage: &str, message: &str) {
+        (self.send_fn)(WebSocketMessage::Progress {
+            stage: stage.to_string(),
+            message: message.to_string(),
+        });
+    }
 
-            fn on_file(&mut self, path: &Path, content: &str) {
-                (self.send_fn)(WebSocketMessage::File {
-                    path: path.display().to_string(),
-                    content: content.to_string(),
-                });
-            }
+    fn on_file(&mut self, path: &Path, content: &str) {
+        (self.send_fn)(WebSocketMessage::File {
+            path: path.display().to_string(),
+            content: content.to_string(),
+        });
+    }
 
-            fn on_complete(&mut self, files: usize, bytes: usize) {
-                (self.send_fn)(WebSocketMessage::Complete { files, bytes });
-            }
+    fn on_complete(&mut self, files: usize, bytes: usize) {
+        (self.send_fn)(WebSocketMessage::Complete { files, bytes });
+    }
 
-            fn on_error(&mut self, error: &str) {
-                (self.send_fn)(WebSocketMessage::Error {
-                    message: error.to_string(),
-                });
-            }
-        }
+    fn on_error(&mut self, error: &str) {
+        (self.send_fn)(WebSocketMessage::Error {
+            message: error.to_string(),
+        });
+    }
+}

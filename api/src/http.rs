@@ -1,4 +1,5 @@
 use crate::ingestion::{IngestionService, IngestionParams, IngestionResult};
+use githem_core::validate_github_name;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -308,6 +309,7 @@ async fn ingest_repository(
 ) -> Result<impl IntoResponse, AppError> {
     let params = IngestionParams {
         url: request.url,
+        subpath: request.subpath.clone(),
         branch: request.branch,
         path_prefix: request.path_prefix.or(request.subpath),
         include_patterns: request.include_patterns,
@@ -421,8 +423,8 @@ async fn handle_repo_compare(
     Path((owner, repo, compare_spec)): Path<(String, String, String)>,
     Query(params): Query<QueryParams>,
 ) -> Result<impl IntoResponse, AppError> {
-    if !IngestionService::validate_github_name(&owner)
-        || !IngestionService::validate_github_name(&repo)
+    if !validate_github_name(&owner)
+        || !validate_github_name(&repo)
     {
         return Err(AppError::InvalidRequest(
             "Invalid owner or repo name".to_string(),
@@ -480,7 +482,7 @@ async fn ingest_github_repo(
     path_prefix: Option<String>,
     params: QueryParams,
 ) -> Result<impl IntoResponse, AppError> {
-    if !IngestionService::validate_github_name(&owner) || !IngestionService::validate_github_name(&repo) {
+    if !validate_github_name(&owner) || !validate_github_name(&repo) {
         return Err(AppError::InvalidRequest(
             "Invalid owner or repo name".to_string(),
         ));
@@ -490,6 +492,7 @@ async fn ingest_github_repo(
     
     let ingestion_params = IngestionParams {
         url,
+        subpath: params.subpath.clone(),
         branch: branch.or(params.branch),
         path_prefix: path_prefix.or(params.subpath),
         include_patterns: params
