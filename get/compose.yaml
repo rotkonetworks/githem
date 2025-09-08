@@ -8,7 +8,9 @@ services:
       - ./install.sh:/usr/share/nginx/html/install.sh:ro
       - ./install/install.ps1:/usr/share/nginx/html/install.ps1:ro
       - ./web/index.html:/usr/share/nginx/html/index.html:ro
-      - ./web/style.css:/usr/share/nginx/html/style.css:ro
+      - ./web/help.html:/usr/share/nginx/html/help.html:ro
+      - ./web/styles.css:/usr/share/nginx/html/styles.css:ro
+      - ./web/globals.css:/usr/share/nginx/html/globals.css:ro
     restart: unless-stopped
     container_name: githem-get
     healthcheck:
