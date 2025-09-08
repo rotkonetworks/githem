@@ -96,7 +96,6 @@ install_unix() {
                     echo "Non-interactive mode detected. Defaulting to AUR installation..."
                     response="y"
                 fi
-                read -r response
                 case "$response" in
                     [nN][oO]|[nN])
                         echo "Installing binary to /usr/local/bin..."
