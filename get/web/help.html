@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>githem help</title>
+    <meta name="description" content="githem CLI documentation">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <div style="margin-bottom: 2rem;"><a href="index.html" style="color: var(--primary);">← back</a></div>
+        
+        <h1>githem</h1>
+        
+        <h2>install</h2>
+        <pre><code>curl -fsSL get.githem.com | sh</code></pre>
+        
+        <h2>usage</h2>
+        <pre><code>githem owner/repo
+githem .
+githem https://github.com/owner/repo</code></pre>
+        
+        <h2>options</h2>
+        <table>
+            <tr>
+                <td><code>-o FILE</code></td>
+                <td>output to file</td>
+            </tr>
+            <tr>
+                <td><code>-i PATTERN</code></td>
+                <td>include patterns</td>
+            </tr>
+            <tr>
+                <td><code>-e PATTERN</code></td>
+                <td>exclude patterns</td>
+            </tr>
+            <tr>
+                <td><code>-b BRANCH</code></td>
+                <td>branch</td>
+            </tr>
+            <tr>
+                <td><code>--preset NAME</code></td>
+                <td>filter preset</td>
+            </tr>
+            <tr>
+                <td><code>--stats</code></td>
+                <td>show statistics</td>
+            </tr>
+        </table>
+        
+        <h2>presets</h2>
+        <table>
+            <tr>
+                <td><code>raw</code></td>
+                <td>no filtering</td>
+            </tr>
+            <tr>
+                <td><code>standard</code></td>
+                <td>default smart filtering</td>
+            </tr>
+            <tr>
+                <td><code>code-only</code></td>
+                <td>source code only</td>
+            </tr>
+            <tr>
+                <td><code>minimal</code></td>
+                <td>basic filtering</td>
+            </tr>
+        </table>
+        
+        <h2>examples</h2>
+        <pre><code># code only
+githem owner/repo --preset code-only
+
+# specific files
+githem . -i "*.rs" -e "tests/*"
+
+# output to file
+githem owner/repo -o output.txt
+
+# specific branch
+githem owner/repo -b develop
+
+# compare branches
+githem owner/repo/compare/main...feature</code></pre>
+        
+        <h2>cache</h2>
+        <pre><code>githem --cache-stats
+githem --clear-cache
+githem owner/repo --no-cache</code></pre>
+        
+        <h2>api</h2>
+        <pre><code>curl https://githem.com/owner/repo
+curl "https://githem.com/owner/repo?preset=code-only"</code></pre>
+        
+        <h2>faq</h2>
+        
+        <div class="faq-item">
+            <h4>what files are filtered?</h4>
+            <p>node_modules, vendor, target, build artifacts, media, binaries, lock files</p>
+        </div>
+        
+        <div class="faq-item">
+            <h4>private repos?</h4>
+            <p>use ssh: <code>githem git@github.com:company/private.git</code></p>
+        </div>
+        
+        <div class="faq-item">
+            <h4>size reduction?</h4>
+            <p>typically 60-80% with standard preset</p>
+        </div>
+        
+        <div class="faq-item">
+            <h4>token estimation?</h4>
+            <p>~1 token per 4 characters, shown with --stats</p>
+        </div>
+    </div>
+</body>
+</html>

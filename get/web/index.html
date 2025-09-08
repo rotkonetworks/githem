@@ -1,87 +1,53 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Githem - Git Repository Manager</title>
-    <link rel="stylesheet" href="style.css" />
-  </head>
-  <body>
-    <div class="container">
-      <header>
-        <h1>Githem</h1>
-        <p>Transform any Git repository into LLM-ready text</p>
-      </header>
-
-      <main>
-        <section class="install-section">
-          <h2>Quick Install</h2>
-
-          <div class="install-option">
-            <h3>Unix/Linux/macOS</h3>
-            <div class="command-box">
-              <code>curl -fsSL get.githem.com | sh</code>
-              <button onclick="copy('curl -fsSL get.githem.com | sh')">
-                Copy
-              </button>
-            </div>
-          </div>
-
-          <div class="install-option">
-            <h3>Windows (PowerShell)</h3>
-            <div class="command-box">
-              <code>iwr -useb get.githem.com/install.ps1 | iex</code>
-              <button
-                onclick="copy('iwr -useb get.githem.com/install.ps1 | iex')"
-              >
-                Copy
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <section class="platforms">
-          <h2>Supported Platforms</h2>
-          <div class="platform-grid">
-            <div class="platform">
-              <span class="icon">🐧</span>
-              <h3>Linux</h3>
-              <p>Generic Linux, Arch (AUR), NixOS</p>
-            </div>
-            <div class="platform">
-              <span class="icon">🍎</span>
-              <h3>macOS</h3>
-              <p>Intel & Apple Silicon</p>
-            </div>
-            <div class="platform">
-              <span class="icon">🪟</span>
-              <h3>Windows</h3>
-              <p>PowerShell installer</p>
-            </div>
-          </div>
-        </section>
-      </main>
-
-      <footer>
-        <a href="https://github.com/rotkonetworks/githem" target="_blank"
-          >View on GitHub</a
-        >
-      </footer>
-    </div>
-
-    <script>
-      function copy(text) {
-        navigator.clipboard.writeText(text).then(() => {
-          const btn = event.target;
-          const orig = btn.textContent;
-          btn.textContent = "Copied!";
-          btn.className = "copied";
-          setTimeout(() => {
-            btn.textContent = orig;
-            btn.className = "";
-          }, 2000);
-        });
-      }
-    </script>
-  </body>
+<head>
+   <meta charset="UTF-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   <title>githem</title>
+   <meta name="description" content="Repository to LLM-ready text">
+   <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+   <div class="container narrow">
+       <img src="https://raw.githubusercontent.com/rotkonetworks/githem/master/media/githem_logo.webp" alt="githem" class="logo">
+       
+       <h1 style="text-align: center;">githem</h1>
+       <p style="text-align: center; color: #9B8A7A; margin-bottom: 3rem;">Repository to LLM-ready text</p>
+       
+       <div class="label">unix/linux/macos</div>
+       <div class="install-box">
+           <code>curl -fsSL get.githem.com | sh</code>
+           <button class="btn btn-primary btn-copy" onclick="copy(this, 'curl -fsSL get.githem.com | sh')">copy</button>
+       </div>
+       
+       <div class="label">windows</div>
+       <div class="install-box">
+           <code>iwr -useb get.githem.com/install.ps1 | iex</code>
+           <button class="btn btn-primary btn-copy" onclick="copy(this, 'iwr -useb get.githem.com/install.ps1 | iex')">copy</button>
+       </div>
+       
+       <div class="input-box">
+           <div class="label">try online</div>
+           <input type="text" placeholder="owner/repo" onkeydown="if(event.key==='Enter') window.open('https://githem.com/' + this.value.replace(/.*github\.com\//, ''), '_blank')">
+       </div>
+       
+       <div class="links">
+           <a href="https://github.com/rotkonetworks/githem">github</a>
+           <a href="help.html">help</a>
+           <a href="https://githem.com">api</a>
+       </div>
+   </div>
+   
+   <script>
+       function copy(btn, text) {
+           navigator.clipboard.writeText(text);
+           btn.textContent = 'copied';
+           btn.classList.add('copied');
+           setTimeout(() => {
+               btn.textContent = 'copy';
+               btn.classList.remove('copied');
+           }, 2000);
+       }
+   </script>
+</body>
 </html>
