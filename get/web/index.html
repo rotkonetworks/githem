@@ -1,53 +1,116 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-   <meta charset="UTF-8">
-   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-   <title>githem</title>
-   <meta name="description" content="Repository to LLM-ready text">
-   <link rel="stylesheet" href="styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>githem - Repository to LLM-ready text converter</title>
+  <meta name="description" content="Convert any GitHub repository to LLM-ready text format. Fast, simple CLI tool for AI development workflows.">
+  <meta name="keywords" content="github, llm, ai, repository converter, code to text, cli tool">
+  <meta name="author" content="Rotko Networks">
+  <meta property="og:title" content="githem - Repository to LLM-ready text">
+  <meta property="og:description" content="Convert GitHub repositories to LLM-ready text with a simple CLI tool">
+  <meta property="og:image" content="https://raw.githubusercontent.com/rotkonetworks/githem/master/media/githem_logo.webp">
+  <meta property="og:url" content="https://get.githem.com">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="githem - Repository to LLM-ready text">
+  <meta name="twitter:description" content="Convert GitHub repositories to LLM-ready text with a simple CLI tool">
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/rotkonetworks/githem/master/media/githem_logo.webp">
+  <link rel="canonical" href="https://get.githem.com">
+  <link rel="icon" type="image/webp" href="https://raw.githubusercontent.com/rotkonetworks/githem/master/media/githem_logo.webp">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-   <div class="container narrow">
-       <img src="https://raw.githubusercontent.com/rotkonetworks/githem/master/media/githem_logo.webp" alt="githem" class="logo">
-       
-       <h1 style="text-align: center;">githem</h1>
-       <p style="text-align: center; color: #9B8A7A; margin-bottom: 3rem;">Repository to LLM-ready text</p>
-       
-       <div class="label">unix/linux/macos</div>
-       <div class="install-box">
-           <code>curl -fsSL get.githem.com | sh</code>
-           <button class="btn btn-primary btn-copy" onclick="copy(this, 'curl -fsSL get.githem.com | sh')">copy</button>
-       </div>
-       
-       <div class="label">windows</div>
-       <div class="install-box">
-           <code>iwr -useb get.githem.com/install.ps1 | iex</code>
-           <button class="btn btn-primary btn-copy" onclick="copy(this, 'iwr -useb get.githem.com/install.ps1 | iex')">copy</button>
-       </div>
-       
-       <div class="input-box">
-           <div class="label">try online</div>
-           <input type="text" placeholder="owner/repo" onkeydown="if(event.key==='Enter') window.open('https://githem.com/' + this.value.replace(/.*github\.com\//, ''), '_blank')">
-       </div>
-       
-       <div class="links">
-           <a href="https://github.com/rotkonetworks/githem">github</a>
-           <a href="help.html">help</a>
-           <a href="https://githem.com">api</a>
-       </div>
-   </div>
-   
-   <script>
-       function copy(btn, text) {
-           navigator.clipboard.writeText(text);
-           btn.textContent = 'copied';
-           btn.classList.add('copied');
-           setTimeout(() => {
-               btn.textContent = 'copy';
-               btn.classList.remove('copied');
-           }, 2000);
-       }
-   </script>
+  <main class="container narrow" role="main">
+      <header>
+          <img src="https://raw.githubusercontent.com/rotkonetworks/githem/master/media/githem_logo.webp" 
+               alt="githem logo" 
+               class="logo"
+               width="180"
+               height="180"
+               loading="eager"
+               decoding="async">
+          <h1 style="text-align: center;">githem</h1>
+          <p style="text-align: center; color: #9B8A7A; margin-bottom: 3rem;">Repository to LLM-ready text</p>
+      </header>
+
+      <section aria-labelledby="installation">
+          <h2 id="installation" class="sr-only">Installation</h2>
+          
+          <div class="install-group">
+              <label for="unix-command" class="label">unix/linux/macos</label>
+              <div class="install-box" role="group" aria-labelledby="unix-label">
+                  <code id="unix-command">curl -fsSL get.githem.com | sh</code>
+                  <button class="btn btn-primary btn-copy" 
+                          onclick="copy(this, 'curl -fsSL get.githem.com | sh')"
+                          aria-label="Copy unix installation command">copy</button>
+              </div>
+          </div>
+
+          <div class="install-group">
+              <label for="windows-command" class="label">windows</label>
+              <div class="install-box" role="group" aria-labelledby="windows-label">
+                  <code id="windows-command">iwr -useb get.githem.com/install.ps1 | iex</code>
+                  <button class="btn btn-primary btn-copy" 
+                          onclick="copy(this, 'iwr -useb get.githem.com/install.ps1 | iex')"
+                          aria-label="Copy windows installation command">copy</button>
+              </div>
+          </div>
+      </section>
+
+      <section aria-labelledby="try-online">
+          <div class="input-box">
+              <label for="repo-input" class="label" id="try-online">try online</label>
+              <input type="text" 
+                     id="repo-input"
+                     placeholder="owner/repo" 
+                     aria-label="Enter GitHub repository in format owner/repo"
+                     onkeydown="if(event.key==='Enter') window.open('https://githem.com/' + this.value.replace(/.*github\.com\//, ''), '_blank')">
+          </div>
+      </section>
+
+      <section aria-labelledby="examples-heading">
+          <h2 id="examples-heading" class="label">examples</h2>
+          <div class="examples-container">
+              <a href="https://githem.com/rotkonetworks/ircstore" target="_blank" rel="noopener" class="example-box">
+                  <span>rotkonetworks/ircstore</span>
+              </a>
+              <a href="https://githem.com/rotkonetworks/nocb" target="_blank" rel="noopener" class="example-box">
+                  <span>rotkonetworks/nocb</span>
+              </a>
+              <a href="https://githem.com/rotkonetworks/githem" target="_blank" rel="noopener" class="example-box">
+                  <span>rotkonetworks/githem</span>
+              </a>
+              <a href="https://githem.com/rotkonetworks/aiur" target="_blank" rel="noopener" class="example-box">
+                  <span>rotkonetworks/aiur</span>
+              </a>
+          </div>
+      </section>
+
+      <footer class="links" role="contentinfo">
+          <nav aria-label="Footer navigation">
+              <a href="https://github.com/rotkonetworks/githem" target="_blank" rel="noopener">github</a>
+              <a href="help.html">help</a>
+              <a href="https://githem.com" target="_blank" rel="noopener">api</a>
+          </nav>
+      </footer>
+  </main>
+
+  <script>
+      function copy(btn, text) {
+          navigator.clipboard.writeText(text).then(() => {
+              btn.textContent = 'copied';
+              btn.classList.add('copied');
+              btn.setAttribute('aria-label', 'Command copied to clipboard');
+              setTimeout(() => {
+                  btn.textContent = 'copy';
+                  btn.classList.remove('copied');
+                  btn.setAttribute('aria-label', btn.getAttribute('aria-label').replace('Command copied to clipboard', 'Copy command'));
+              }, 2000);
+          }).catch(err => {
+              console.error('Failed to copy:', err);
+          });
+      }
+  </script>
 </body>
 </html>

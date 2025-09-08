@@ -2,244 +2,318 @@
 
 /* Dark theme base */
 body {
-  background: var(--shadow);
-  color: var(--text-light);
+ background: var(--shadow);
+ color: var(--text-light);
 }
 
 .container {
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 2rem;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
+ max-width: 800px;
+ margin: 0 auto;
+ padding: 2rem;
+ min-height: 100vh;
+ display: flex;
+ flex-direction: column;
 }
 
 .container.narrow {
-  max-width: 600px;
+ max-width: 600px;
 }
 
 /* Headers */
 h1 {
-  font-size: 3rem;
-  font-weight: 900;
-  color: var(--primary);
-  margin-bottom: 0.5rem;
-  letter-spacing: -0.02em;
+ font-size: 3rem;
+ font-weight: 900;
+ color: var(--primary);
+ margin-bottom: 0.5rem;
+ letter-spacing: -0.02em;
 }
 
 h2 {
-  color: var(--primary);
-  margin: 2rem 0 1rem 0;
-  font-size: 1.5rem;
+ color: var(--primary);
+ margin: 2rem 0 1rem 0;
+ font-size: 1.5rem;
 }
 
 /* Logo */
 .logo {
-  width: 100px;
-  height: 100px;
-  margin: 0 auto 1.5rem;
-  display: block;
+ width: 180px;
+ height: 180px;
+ margin: 0 auto 1.5rem;
+ display: block;
 }
 
 /* Install sections */
 .install-box {
-  background: var(--secondary);
-  border: 1px solid #3A4A3F;
-  border-radius: 8px;
-  padding: 1rem;
-  margin-bottom: 1rem;
-  position: relative;
-  transition: border-color 0.2s;
+ background: var(--secondary);
+ border: 1px solid #3A4A3F;
+ border-radius: 8px;
+ padding: 1rem;
+ margin-bottom: 1rem;
+ position: relative;
+ transition: border-color 0.2s;
 }
 
 .install-box:hover {
-  border-color: var(--primary);
+ border-color: var(--primary);
 }
 
 .install-box code {
-  display: block;
-  font-family: 'SF Mono', Monaco, monospace;
-  color: var(--primary);
-  font-size: 0.95rem;
-  padding-right: 4rem;
+ display: block;
+ font-family: 'SF Mono', Monaco, monospace;
+ color: var(--primary);
+ font-size: 0.95rem;
+ padding-right: 4rem;
 }
 
 /* Buttons */
 .btn {
-  border: none;
-  padding: 0.5rem 1rem;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 0.85rem;
-  font-weight: 600;
-  transition: all 0.2s;
+ border: none;
+ padding: 0.5rem 1rem;
+ border-radius: 6px;
+ cursor: pointer;
+ font-size: 0.85rem;
+ font-weight: 600;
+ transition: all 0.2s;
 }
 
 .btn-primary {
-  background: var(--primary);
-  color: var(--shadow);
+ background: var(--primary);
+ color: var(--shadow);
 }
 
 .btn-primary:hover {
-  background: var(--accent);
+ background: var(--accent);
 }
 
 .btn-copy {
-  position: absolute;
-  right: 1rem;
-  top: 50%;
-  transform: translateY(-50%);
+ position: absolute;
+ right: 1rem;
+ top: 50%;
+ transform: translateY(-50%);
 }
 
 .btn-copy.copied {
-  background: var(--success);
-  color: white;
+ background: var(--success);
+ color: white;
 }
 
 /* Labels */
 .label {
-  font-size: 0.75rem;
-  color: #9B8A7A;
-  margin-bottom: 0.5rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 600;
+ font-size: 0.75rem;
+ color: #B89A7A;
+ margin-bottom: 0.5rem;
+ text-transform: uppercase;
+ letter-spacing: 0.05em;
+ font-weight: 600;
 }
 
 /* Input */
 .input-box {
-  background: var(--secondary);
-  border: 1px solid #3A4A3F;
-  border-radius: 8px;
-  padding: 1rem;
-  margin-top: 2rem;
+ background: var(--secondary);
+ border: 1px solid #3A4A3F;
+ border-radius: 8px;
+ padding: 1rem;
+ margin-top: 2rem;
 }
 
 .input-box input {
-  width: 100%;
-  background: var(--shadow);
-  border: 1px solid #3A4A3F;
-  color: var(--text-light);
-  padding: 0.6rem;
-  border-radius: 4px;
-  font-family: 'SF Mono', Monaco, monospace;
-  font-size: 0.9rem;
-  transition: border-color 0.2s;
+ width: 100%;
+ background: var(--shadow);
+ border: 1px solid #3A4A3F;
+ color: var(--text-light);
+ padding: 0.6rem;
+ border-radius: 4px;
+ font-family: 'SF Mono', Monaco, monospace;
+ font-size: 0.9rem;
+ transition: border-color 0.2s;
 }
 
 .input-box input:focus {
-  outline: none;
-  border-color: var(--primary);
+ outline: none;
+ border-color: var(--primary);
+}
+
+/* Examples section */
+.examples-container {
+ display: flex;
+ flex-direction: column;
+ gap: 0.5rem;
+ margin-top: 0.5rem;
+ margin-bottom: 2rem;
+}
+
+.example-box {
+ background: var(--secondary);
+ border: 1px solid #3A4A3F;
+ border-radius: 8px;
+ padding: 1rem;
+ color: var(--text-light);
+ text-decoration: none;
+ font-family: 'SF Mono', Monaco, monospace;
+ font-size: 0.95rem;
+ transition: all 0.2s;
+ display: block;
+}
+
+.example-box:hover {
+ border-color: var(--primary);
+ background: #1F2A21;
+}
+
+.example-box span {
+ color: var(--primary);
 }
 
 /* Links */
 .links {
-  margin-top: 3rem;
-  padding-top: 2rem;
-  border-top: 1px solid #3A4A3F;
-  display: flex;
-  gap: 2rem;
-  justify-content: center;
-  font-size: 0.9rem;
+ margin-top: 3rem;
+ padding-top: 2rem;
+ border-top: 1px solid #3A4A3F;
+ display: flex;
+ gap: 2rem;
+ justify-content: center;
+ font-size: 0.9rem;
 }
 
 .links a {
-  color: #9B8A7A;
-  text-decoration: none;
-  transition: color 0.2s;
+ color: #9B8A7A;
+ text-decoration: none;
+ transition: color 0.2s;
 }
 
 .links a:hover {
-  color: var(--primary);
+ color: var(--primary);
 }
 
 /* Help page specific */
 pre {
-  background: var(--secondary);
-  border: 1px solid #3A4A3F;
-  border-radius: 8px;
-  padding: 1rem;
-  margin: 1rem 0;
-  overflow-x: auto;
+ background: var(--secondary);
+ border: 1px solid #3A4A3F;
+ border-radius: 8px;
+ padding: 1rem;
+ margin: 1rem 0;
+ overflow-x: auto;
 }
 
 pre code {
-  background: none;
-  padding: 0;
-  color: var(--primary);
+ background: none;
+ padding: 0;
+ color: var(--primary);
 }
 
 code {
-  background: var(--secondary);
-  padding: 0.2rem 0.4rem;
-  border-radius: 3px;
-  font-family: 'SF Mono', Monaco, monospace;
-  color: var(--primary);
+ background: var(--secondary);
+ padding: 0.2rem 0.4rem;
+ border-radius: 3px;
+ font-family: 'SF Mono', Monaco, monospace;
+ color: var(--primary);
 }
 
 table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--secondary);
-  border-radius: 8px;
-  overflow: hidden;
-  margin: 1rem 0;
+ width: 100%;
+ border-collapse: collapse;
+ background: var(--secondary);
+ border-radius: 8px;
+ overflow: hidden;
+ margin: 1rem 0;
 }
 
 th, td {
-  padding: 0.8rem;
-  text-align: left;
-  border-bottom: 1px solid #3A4A3F;
+ padding: 0.8rem;
+ text-align: left;
+ border-bottom: 1px solid #3A4A3F;
 }
 
 th {
-  background: #1F2A21;
-  color: var(--primary);
-  font-weight: 600;
+ background: #1F2A21;
+ color: var(--primary);
+ font-weight: 600;
 }
 
 .note {
-  background: rgba(255, 107, 53, 0.1);
-  border-left: 4px solid var(--primary);
-  padding: 1rem;
-  margin: 1rem 0;
-  border-radius: 4px;
+ background: rgba(255, 107, 53, 0.1);
+ border-left: 4px solid var(--primary);
+ padding: 1rem;
+ margin: 1rem 0;
+ border-radius: 4px;
 }
 
 .faq-item {
-  background: var(--secondary);
-  border-radius: 8px;
-  padding: 1.5rem;
-  margin-bottom: 1rem;
+ background: var(--secondary);
+ border-radius: 8px;
+ padding: 1.5rem;
+ margin-bottom: 1rem;
 }
 
 .faq-item h4 {
-  color: var(--primary);
-  margin-bottom: 0.5rem;
+ color: var(--primary);
+ margin-bottom: 0.5rem;
+}
+
+/* Accessibility helpers */
+.sr-only {
+ position: absolute;
+ width: 1px;
+ height: 1px;
+ padding: 0;
+ margin: -1px;
+ overflow: hidden;
+ clip: rect(0, 0, 0, 0);
+ white-space: nowrap;
+ border: 0;
+}
+
+/* Focus styles for keyboard navigation */
+*:focus {
+ outline: 2px solid var(--primary);
+ outline-offset: 2px;
+}
+
+button:focus,
+a:focus {
+ outline: 2px solid var(--primary);
+ outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+ .install-box,
+ .example-box,
+ .input-box {
+   border-width: 2px;
+ }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+ * {
+   animation-duration: 0.01ms !important;
+   animation-iteration-count: 1 !important;
+   transition-duration: 0.01ms !important;
+ }
 }
 
 /* Responsive */
 @media (max-width: 640px) {
-  .container {
-    padding: 1rem;
-  }
-  
-  h1 {
-    font-size: 2rem;
-  }
-  
-  .install-box {
-    padding: 0.8rem;
-  }
-  
-  .install-box code {
-    font-size: 0.85rem;
-    padding-right: 3rem;
-  }
-  
-  .btn-copy {
-    padding: 0.4rem 0.6rem;
-    font-size: 0.75rem;
-  }
+ .container {
+   padding: 1rem;
+ }
+
+ h1 {
+   font-size: 2rem;
+ }
+
+ .install-box {
+   padding: 0.8rem;
+ }
+
+ .install-box code {
+   font-size: 0.85rem;
+   padding-right: 3rem;
+ }
+
+ .btn-copy {
+   padding: 0.4rem 0.6rem;
+   font-size: 0.75rem;
+ }
 }
