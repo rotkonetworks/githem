@@ -39,6 +39,10 @@ is_windows() {
     esac
 }
 
+is_interactive() {
+    [ -t 0 ]
+}
+
 run_powershell_installer() {
     echo "Windows detected. Running PowerShell installer..."
     if command -v powershell >/dev/null 2>&1; then
@@ -85,7 +89,13 @@ install_unix() {
                 echo "  # or"
                 echo "  paru -S githem-cli"
                 echo ""
-                echo "Install from AUR? (recommended) [Y/n]"
+                if is_interactive; then
+                    echo "Install from AUR? (recommended) [Y/n]"
+                    read -r response
+                else
+                    echo "Non-interactive mode detected. Defaulting to AUR installation..."
+                    response="y"
+                fi
                 read -r response
                 case "$response" in
                     [nN][oO]|[nN])
