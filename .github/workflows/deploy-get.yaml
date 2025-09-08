@@ -18,10 +18,10 @@ jobs:
       
       - name: Deploy to server
         env:
-          SSH_USER: ${{ secrets.SERVER_USER }}
-          SSH_HOST: ${{ secrets.SERVER_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_USER }}
+          SSH_HOST: ${{ secrets.DEPLOY_HOST }}
         run: |
-          echo "${{ secrets.SSH_KEY }}" > ssh_key
+          echo "${{ secrets.DEPLOY_KEY }}" > ssh_key
           chmod 600 ssh_key
           
           # Setup deployment directory

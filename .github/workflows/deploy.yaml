@@ -21,9 +21,9 @@ jobs:
           tags: ghcr.io/${{ github.repository }}:latest
       - name: Deploy to server
         run: |
-          echo "${{ secrets.SSH_KEY }}" > ssh_key
+          echo "${{ secrets.DEPLOY_KEY }}" > ssh_key
           chmod 600 ssh_key
-          ssh -i ssh_key -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+          ssh -i ssh_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'EOF'
             echo "${{ secrets.GITHUB_TOKEN }}" \
               | docker login ghcr.io \
                 --username "${{ github.actor }}" \
