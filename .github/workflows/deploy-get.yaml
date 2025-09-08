@@ -1,7 +1,7 @@
 name: Deploy get.githem.com
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - 'get/**'
   workflow_dispatch:
