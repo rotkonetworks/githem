@@ -34,6 +34,9 @@ sed -i "/^sha256sums_aarch64=/,/)/ {
     s/'[a-f0-9]\{64\}'/'${ARM64_SHA512}'/2
 }" PKGBUILD
 
+# Fix any stray backslashes
+sed -i 's/\\)$/)/g' PKGBUILD
+
 # regenerate .SRCINFO
 makepkg --printsrcinfo > .SRCINFO
 

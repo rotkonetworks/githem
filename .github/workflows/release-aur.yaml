@@ -1,0 +1,83 @@
+name: Release to AUR
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g., 0.3.3)"
+        required: true
+        type: string
+
+jobs:
+  update-aur:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get release version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            # Remove 'v' prefix if present
+            VERSION=${VERSION#v}
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Release version: ${VERSION}"
+
+      - name: Setup SSH for AUR
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          echo "Host aur.archlinux.org" >> ~/.ssh/config
+          echo "  IdentityFile ~/.ssh/aur" >> ~/.ssh/config
+          echo "  User aur" >> ~/.ssh/config
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+
+      - name: Setup PGP signing
+        run: |
+          # Import PGP private key
+          echo "${{ secrets.PGP_PRIVATE_KEY }}" | gpg --batch --import
+
+          git config --global user.signingkey 72A814E5A56943D7
+          git config --global commit.gpgsign true
+          git config --global gpg.program gpg
+
+      - name: Install build dependencies
+        run: |
+          sudo pacman -Sy --noconfirm base-devel namcap
+
+      - name: Clone and update AUR package
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Clone AUR repo to temporary directory  
+          git clone ssh://aur@aur.archlinux.org/githem-cli.git aur-temp
+
+          # Copy our scripts and PKGBUILD
+          cp get/aur/* aur-temp/
+
+          # Run update script
+          cd aur-temp
+          chmod +x update.sh submit.sh
+          ./update.sh "${VERSION}"
+
+      - name: Submit to AUR
+        run: |
+          cd aur-temp
+          ./submit.sh
+
+      - name: Create summary
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "## AUR Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Successfully released **githem-cli v${VERSION}** to AUR" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [View on AUR](https://aur.archlinux.org/packages/githem-cli)" >> $GITHUB_STEP_SUMMARY
