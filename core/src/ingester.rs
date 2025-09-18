@@ -90,13 +90,13 @@ impl Ingester {
     pub fn from_url_cached(url: &str, options: IngestOptions) -> Result<Self> {
         let repo = clone_repository(url, options.branch.as_deref())?;
         let mut ingester = Self::new(repo, options.clone());
-        
+
         ingester.cache = RepositoryCache::new().ok();
         ingester.cache_key = Some(RepositoryCache::generate_cache_key(
-            url,
-            options.branch.as_deref(),
+                url,
+                options.branch.as_deref(),
         ));
-        
+
         Ok(ingester)
     }
 
@@ -133,7 +133,7 @@ impl Ingester {
     pub fn ingest<W: Write>(&self, output: &mut W) -> Result<()> {
         let files = self.collect_filtered_files()?;
         let workdir = self.repo.workdir().context("Repository has no working directory")?;
-        
+
         let mut processed = 0;
         for file in files {
             let full_path = workdir.join(&file);
@@ -152,7 +152,7 @@ impl Ingester {
 
     pub fn ingest_cached<W: Write>(&mut self, output: &mut W) -> Result<()> {
         let commit_hash = self.get_current_commit()?;
-        
+
         if let Some(ref mut cache) = self.cache {
             if let Some(ref cache_key) = self.cache_key {
                 match cache.check_commit(cache_key, &commit_hash) {
@@ -172,7 +172,7 @@ impl Ingester {
                 }
             }
         }
-        
+
         let cache_entry = self.fetch_and_cache()?;
         self.filter_cached_files(cache_entry, output)
     }
@@ -203,13 +203,15 @@ impl Ingester {
             let head = head_result?;
             let tree = head.peel_to_tree()?;
 
-            let tree_to_walk = if let Some(prefix) = &self.options.path_prefix {
+            // when path_prefix is set, walk from that subtree
+            // otherwise walk from root
+            let (tree_to_walk, is_subtree) = if let Some(prefix) = &self.options.path_prefix {
                 match tree.get_path(Path::new(prefix)) {
-                    Ok(entry) => self.repo.find_tree(entry.id())?,
+                    Ok(entry) => (self.repo.find_tree(entry.id())?, true),
                     Err(_) => return Ok(Vec::new()),
                 }
             } else {
-                tree
+                (tree, false)
             };
 
             tree_to_walk.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
@@ -220,13 +222,21 @@ impl Ingester {
                         } else {
                             PathBuf::from(dir).join(name)
                         };
-                        let path = if let Some(prefix) = &self.options.path_prefix {
-                            PathBuf::from(prefix).join(path)
+
+                        // when walking a subtree, paths are relative to that subtree
+                        // prepend the prefix to get the full repository path
+                        let full_path = if is_subtree {
+                            if let Some(prefix) = &self.options.path_prefix {
+                                PathBuf::from(prefix).join(path)
+                            } else {
+                                path
+                            }
                         } else {
                             path
                         };
-                        if self.should_include(&path).unwrap_or(false) {
-                            files.push(path);
+
+                        if self.should_include(&full_path).unwrap_or(false) {
+                            files.push(full_path);
                         }
                     }
                 }
@@ -234,6 +244,7 @@ impl Ingester {
             })?;
         }
 
+        // handle untracked files
         if self.options.include_untracked || !has_commits {
             let mut status_opts = StatusOptions::new();
             status_opts.include_untracked(true);
@@ -263,6 +274,7 @@ impl Ingester {
         Ok(files)
     }
 
+
     fn get_current_commit(&self) -> Result<String> {
         let head = self.repo.head()?;
         let commit = head.peel_to_commit()?;
@@ -274,22 +286,22 @@ impl Ingester {
         let commit_hash = self.get_current_commit()?;
         let mut files = Vec::new();
         let mut total_size = 0u64;
-        
+
         let all_files = self.collect_all_repository_files()?;
-        
+
         for file_path in all_files {
             let full_path = workdir.join(&file_path);
-            
+
             if !full_path.exists() || !full_path.is_file() {
                 continue;
             }
-            
+
             let metadata = std::fs::metadata(&full_path)?;
             let content = std::fs::read(&full_path)?;
             let is_binary = content.iter().take(8000).any(|&b| b == 0);
-            
+
             total_size += metadata.len();
-            
+
             files.push(CachedFile {
                 path: file_path,
                 content,
@@ -297,7 +309,7 @@ impl Ingester {
                 is_binary,
             });
         }
-        
+
         let cache_entry = CacheEntry {
             repo_url: self.repo.path().to_string_lossy().to_string(),
             branch: self.options.branch.clone().unwrap_or_else(|| "HEAD".to_string()),
@@ -312,25 +324,25 @@ impl Ingester {
             created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
             last_accessed: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
         };
-        
+
         if let Some(ref mut cache) = self.cache {
             if let Some(ref cache_key) = self.cache_key {
                 cache.put(cache_key.clone(), cache_entry.clone())?;
                 eprintln!("✓ Cached {} files ({:.2} MB)",
-                         files.len(),
-                         total_size as f64 / 1_048_576.0);
+                files.len(),
+                total_size as f64 / 1_048_576.0);
             }
         }
-        
+
         Ok(cache_entry)
     }
 
     fn collect_all_repository_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
-        
+
         let head = self.repo.head()?;
         let tree = head.peel_to_tree()?;
-        
+
         tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
             if entry.kind() == Some(git2::ObjectType::Blob) {
                 if let Some(name) = entry.name() {
@@ -344,49 +356,49 @@ impl Ingester {
             }
             git2::TreeWalkResult::Ok
         })?;
-        
+
         Ok(files)
     }
 
     fn filter_cached_files<W: Write>(&self, cache_entry: CacheEntry, output: &mut W) -> Result<()> {
         let mut processed = 0;
         let mut filtered_size = 0u64;
-        
+
         for cached_file in &cache_entry.files {
             if !self.should_include(&cached_file.path)? {
                 continue;
             }
-            
+
             if cached_file.size > self.options.max_file_size as u64 {
                 continue;
             }
-            
+
             let content = if cached_file.is_binary {
                 "[Binary file]".to_string()
             } else {
                 String::from_utf8_lossy(&cached_file.content).to_string()
             };
-            
+
             writeln!(output, "=== {} ===", cached_file.path.display())?;
             writeln!(output, "{}", content)?;
             writeln!(output)?;
-            
+
             processed += 1;
             filtered_size += cached_file.size;
         }
-        
+
         eprintln!("→ Filtered: {} files ({:.2} MB) from {} total",
-                 processed,
-                 filtered_size as f64 / 1_048_576.0,
-                 cache_entry.metadata.total_files);
-        
+        processed,
+        filtered_size as f64 / 1_048_576.0,
+        cache_entry.metadata.total_files);
+
         Ok(())
     }
 
     pub fn get_filter_stats(&self) -> Result<FilterStats> {
         let workdir = self.repo.workdir().context("Repository has no working directory")?;
         let all_files = self.collect_all_repository_files()?;
-        
+
         let mut stats = FilterStats::default();
         stats.total_files = all_files.len();
 
@@ -411,33 +423,33 @@ impl Ingester {
 
     pub fn generate_diff(&self, base: &str, head: &str) -> Result<String> {
         let repo = &self.repo;
-        
+
         let (base_object, _) = repo.revparse_ext(base)?;
         let (head_object, _) = repo.revparse_ext(head)?;
-        
+
         let base_commit = base_object.peel_to_commit()?;
         let head_commit = head_object.peel_to_commit()?;
-        
+
         let base_tree = base_commit.tree()?;
         let head_tree = head_commit.tree()?;
-        
+
         let mut diff_opts = git2::DiffOptions::new();
         let diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut diff_opts))?;
-        
+
         let mut output = String::new();
         output.push_str(&format!("# Comparing {} to {}\n\n", base, head));
-        
+
         let stats = diff.stats()?;
         output.push_str(&format!("Files changed: {}\n", stats.files_changed()));
         output.push_str(&format!("Insertions: {}\n", stats.insertions()));
         output.push_str(&format!("Deletions: {}\n\n", stats.deletions()));
-        
+
         diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
             let content = std::str::from_utf8(line.content()).unwrap_or("[binary]");
             output.push_str(content);
             true
         })?;
-        
+
         Ok(output)
     }
 

@@ -128,6 +128,7 @@ pub struct QueryParams {
     pub max_size: Option<usize>,
     pub preset: Option<String>,
     pub raw: Option<bool>,
+    pub path: Option<String>,
 }
 
 async fn api_info() -> impl IntoResponse {
@@ -494,7 +495,7 @@ async fn ingest_github_repo(
         url,
         subpath: params.subpath.clone(),
         branch: branch.or(params.branch),
-        path_prefix: path_prefix.or(params.subpath),
+        path_prefix: path_prefix.or(params.path.clone()).or(params.subpath.clone()),
         include_patterns: params
             .include
             .unwrap_or_default()
