@@ -7,8 +7,8 @@ version = "0.4.0"
 edition = "2021"
 authors = ["Rotko Networks <hq@rotko.net>"]
 license = "MIT"
-repository = "https://github.com/rotko/githem"
-homepage = "https://githem.com"
+repository = "https://github.com/rotkonetworks/githem"
+homepage = "https://get.githem.com"
 
 [workspace.dependencies]
 anyhow = "1.0"

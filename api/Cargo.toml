@@ -1,9 +1,12 @@
 [package]
 name = "githem-api"
+description = "Githem API server - Git repository hosting service"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [[bin]]
 name = "githem-api"
@@ -14,7 +17,7 @@ default = []
 rate-limit = ["dep:tower_governor"]
 
 [dependencies]
-githem-core = { path = "../core" }
+githem-core = { version = "0.4.0", path = "../core" }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

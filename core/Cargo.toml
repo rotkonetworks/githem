@@ -1,9 +1,12 @@
 [package]
 name = "githem-core"
+description = "Core library for Githem - Git repository management and hosting"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
