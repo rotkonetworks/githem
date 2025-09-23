@@ -492,6 +492,11 @@ async fn ingest_github_repo(
     Ok(result.content)
 }
 
+async fn get_top_repos(State(state): State<AppState>) -> impl IntoResponse {
+    let repos = state.metrics.get_top_repositories(10).await;
+    Json(repos)
+}
+
 async fn get_metrics(State(state): State<AppState>) -> impl IntoResponse {
     let metrics = state.metrics.get_metrics().await;
     Json(metrics)
@@ -517,6 +522,7 @@ pub fn create_router() -> Router {
         // API endpoints
         .route("/health", get(health))
         .route("/metrics", get(get_metrics))
+        .route("/api/metrics/top", get(get_top_repos))
         .route("/cache/stats", get(get_cache_stats))
         .route("/api/ingest", post(ingest_repository))
         .route("/api/result/{id}", get(get_result))

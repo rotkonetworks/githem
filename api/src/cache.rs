@@ -110,12 +110,12 @@ impl RepositoryCache {
         cache.insert(key, entry);
     }
 
-    pub async fn invalidate(&self, key: &str) {
+    pub async fn _invalidate(&self, key: &str) {
         let mut cache = self.cache.write().await;
         cache.remove(key);
     }
 
-    pub async fn clear(&self) {
+    pub async fn _clear(&self) {
         let mut cache = self.cache.write().await;
         cache.clear();
     }
