@@ -468,9 +468,9 @@ async fn handle_repo_compare(
 fn parse_compare_spec(spec: &str) -> Option<(String, String)> {
     // Support both three-dot (...) and two-dot (..) syntax
     if let Some((base, head)) = spec.split_once("...") {
-        Some((base.to_string(), head.to_string()))
+        if !base.is_empty() && !head.is_empty() { Some((base.to_string(), head.to_string())) } else { None }
     } else if let Some((base, head)) = spec.split_once("..") {
-        Some((base.to_string(), head.to_string()))
+        if !base.is_empty() && !head.is_empty() { Some((base.to_string(), head.to_string())) } else { None }
     } else {
         None
     }
@@ -495,7 +495,8 @@ async fn ingest_github_repo(
         url,
         subpath: params.subpath.clone(),
         branch: branch.or(params.branch),
-        path_prefix: path_prefix.or(params.path.clone()).or(params.subpath.clone()),
+        path_prefix: path_prefix.or(params.path.clone()).or(params.subpath.clone())
+            .filter(|p| !p.contains("..") && !p.starts_with('/')),
         include_patterns: params
             .include
             .unwrap_or_default()
