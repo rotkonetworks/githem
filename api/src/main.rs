@@ -1,3 +1,5 @@
+mod cache;
+mod metrics;
 mod http;
 mod ingestion;
 mod websocket;

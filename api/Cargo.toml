@@ -31,3 +31,5 @@ rand = { workspace = true }
 
 # Optional rate limiting
 tower_governor = { version = "0.7", optional = true }
+tempfile = "3.8"
+sha2 = "0.10"

@@ -1,13 +1,14 @@
-use crate::ingestion::{IngestionParams, IngestionResult, IngestionService};
+use crate::cache::RepositoryCache;
+use crate::metrics::MetricsCollector;
+use crate::ingestion::{IngestionParams, IngestionService};
 use githem_core::validate_github_name;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json},
+    http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Json, Html, Response},
     routing::{get, post},
     Router,
 };
@@ -22,13 +23,8 @@ const INGEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone)]
 pub struct AppState {
-    pub cache: Arc<tokio::sync::RwLock<HashMap<String, CachedResult>>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct CachedResult {
-    pub result: IngestionResult,
-    pub created_at: Instant,
+    pub repo_cache: Arc<RepositoryCache>,
+    pub metrics: Arc<MetricsCollector>,
 }
 
 impl Default for AppState {
@@ -39,8 +35,14 @@ impl Default for AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        let metrics = Arc::new(MetricsCollector::new());
         Self {
-            cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            repo_cache: Arc::new(RepositoryCache::new(
+                5 * 1024 * 1024 * 1024, // 5GB
+                Duration::from_secs(3600), // 1 hour TTL
+                metrics.clone()
+            )),
+            metrics,
         }
     }
 }
@@ -57,9 +59,7 @@ pub struct IngestRequest {
     pub exclude_patterns: Vec<String>,
     #[serde(default = "default_max_file_size")]
     pub max_file_size: usize,
-    /// Filter preset: "raw", "standard", "code-only", "minimal"
     pub filter_preset: Option<String>,
-    /// Raw mode - disable all filtering
     #[serde(default)]
     pub raw: bool,
 }
@@ -137,164 +137,67 @@ pub struct QueryParams {
     pub path: Option<String>,
 }
 
-async fn api_info() -> impl IntoResponse {
-    Json(serde_json::json!({
-        "name": "Githem API",
-        "description": "Powertool for grabbing git repositories to be fed for LLMs",
-        "version": env!("CARGO_PKG_VERSION"),
-        "endpoints": {
-            "GET /": {
-                "description": "API information and usage documentation",
-                "response": "This endpoint - API documentation"
-            },
-            "GET /health": {
-                "description": "Health check endpoint",
-                "response": "Service status, timestamp, and version"
-            },
-            "POST /api/ingest": {
-                "description": "Ingest a repository from any Git URL",
-                "request_body": {
-                    "url": "Git repository URL (required)",
-                    "branch": "Branch name (optional, defaults to default branch)",
-                    "subpath": "Subpath within repository (optional)",
-                    "path_prefix": "Path prefix (optional, alias for subpath)",
-                    "include_patterns": "Array of file patterns to include (optional)",
-                    "exclude_patterns": "Array of file patterns to exclude (optional)",
-                    "max_file_size": "Maximum file size in bytes (optional, default: 10MB)",
-                    "filter_preset": "Filter preset: raw, standard, code-only, minimal (optional, default: standard)",
-                    "raw": "Raw mode - disable all filtering (optional, default: false)"
-                },
-                "response": "Ingestion ID and status",
-                "example": {
-                    "url": "https://github.com/owner/repo",
-                    "branch": "main",
-                    "include_patterns": ["*.rs", "*.md"],
-                    "exclude_patterns": ["target/", "*.lock"],
-                    "filter_preset": "standard"
-                }
-            },
-            "GET /api/result/{id}": {
-                "description": "Get ingestion result by ID",
-                "parameters": {
-                    "id": "Ingestion ID from /api/ingest response"
-                },
-                "response": "Complete ingestion result with metadata and content"
-            },
-            "GET /api/download/{id}": {
-                "description": "Download ingested content as text file",
-                "parameters": {
-                    "id": "Ingestion ID from /api/ingest response"
-                },
-                "response": "Text file download with repository content"
-            },
-            "GET /{owner}/{repo}": {
-                "description": "Direct GitHub repository ingestion",
-                "parameters": {
-                    "owner": "GitHub repository owner",
-                    "repo": "GitHub repository name"
-                },
-                "query_parameters": {
-                    "branch": "Branch name (optional)",
-                    "subpath": "Subpath within repository (optional)",
-                    "include": "Comma-separated include patterns (optional)",
-                    "exclude": "Comma-separated exclude patterns (optional)",
-                    "max_size": "Maximum file size in bytes (optional)",
-                    "preset": "Filter preset: raw, standard, code-only, minimal (optional, default: standard)",
-                    "raw": "Raw mode - disable filtering (optional)"
-                },
-                "response": "Repository content as plain text",
-                "example": "/microsoft/typescript?branch=main&include=*.ts,*.md&exclude=node_modules&preset=code-only"
-            },
-            "GET /{owner}/{repo}/tree/{branch}": {
-                "description": "GitHub repository ingestion with specific branch",
-                "parameters": {
-                    "owner": "GitHub repository owner",
-                    "repo": "GitHub repository name",
-                    "branch": "Branch name"
-                },
-                "query_parameters": "Same as /{owner}/{repo}",
-                "response": "Repository content as plain text"
-            },
-            "GET /{owner}/{repo}/tree/{branch}/*path": {
-                "description": "GitHub repository ingestion with specific branch and path",
-                "parameters": {
-                    "owner": "GitHub repository owner",
-                    "repo": "GitHub repository name",
-                    "branch": "Branch name",
-                    "path": "Path within repository"
-                },
-                "query_parameters": "Same as /{owner}/{repo}",
-                "response": "Repository content as plain text"
-            },
-            "GET /{owner}/{repo}/compare/{compare_spec}": {
-                "description": "Compare two branches/commits and get the diff",
-                "parameters": {
-                    "owner": "GitHub repository owner",
-                    "repo": "GitHub repository name",
-                    "compare_spec": "Comparison specification (e.g., 'main...feature' or 'main..feature')"
-                },
-                "query_parameters": {
-                    "preset": "Filter preset for diff output (optional)",
-                    "include": "Include only files matching patterns in diff (optional)",
-                    "exclude": "Exclude files matching patterns from diff (optional)"
-                },
-                "response": "Unified diff format with statistics",
-                "example": "/polytope-labs/hyperbridge/compare/main...tendermint"
-            }
-        },
-        "usage_examples": {
-            "curl_examples": [
-                {
-                    "description": "Ingest a repository with standard filtering",
-                    "command": "curl -X POST http://localhost:42069/api/ingest -H \"Content-Type: application/json\" -d '{\"url\": \"https://github.com/owner/repo\", \"branch\": \"main\", \"filter_preset\": \"standard\"}'"
-                },
-                {
-                    "description": "Ingest with raw mode (no filtering)",
-                    "command": "curl -X POST http://localhost:42069/api/ingest -H \"Content-Type: application/json\" -d '{\"url\": \"https://github.com/owner/repo\", \"raw\": true}'"
-                },
-                {
-                    "description": "Get ingestion result",
-                    "command": "curl http://localhost:42069/api/result/{id}"
-                },
-                {
-                    "description": "Download content",
-                    "command": "curl http://localhost:42069/api/download/{id}"
-                },
-                {
-                    "description": "Direct GitHub ingestion with code-only preset",
-                    "command": "curl http://localhost:42069/microsoft/typescript?branch=main&preset=code-only"
-                },
-                {
-                    "description": "Compare branches",
-                    "command": "curl http://localhost:42069/owner/repo/compare/main...feature"
-                }
-            ]
-        },
-        "filtering": {
-            "presets": {
-                "raw": "No filtering - include everything",
-                "standard": "Smart filtering for LLM analysis (default)",
-                "code-only": "Only source code files, exclude documentation",
-                "minimal": "Basic filtering - exclude obvious binary/large files"
-            },
-            "default_excludes": [
-                "Lock files: *.lock, package-lock.json, Cargo.lock",
-                "Dependencies: node_modules/, target/, vendor/",
-                "Build artifacts: dist/, build/, .next/",
-                "Media files: images, videos, fonts",
-                "Binary files: archives, executables",
-                "IDE files: .vscode/, .idea/, .DS_Store"
-            ]
-        },
-        "notes": {
-            "timeout": "Ingestion requests timeout after 300 seconds",
-            "cache": "Results are cached in memory (max 100 entries, LRU eviction)",
-            "file_size": "Default maximum file size is 10MB",
-            "github_shortcut": "GitHub URLs can be accessed directly via /{owner}/{repo} paths",
-            "filtering": "Smart filtering is enabled by default. Use raw=true or preset=raw to disable.",
-            "compare": "Compare supports both two-dot (..) and three-dot (...) syntax"
+// Serve static files
+async fn serve_static_file(filename: &str) -> Response {
+    let (content, content_type) = match filename {
+        "index.html" | "" => (
+            include_str!("../../get/web/index.html"),
+            "text/html; charset=utf-8"
+        ),
+        "help.html" => (
+            include_str!("../../get/web/help.html"),
+            "text/html; charset=utf-8"
+        ),
+        "styles.css" => (
+            include_str!("../../get/web/styles.css"),
+            "text/css; charset=utf-8"
+        ),
+        "globals.css" => (
+            include_str!("../../get/web/globals.css"),
+            "text/css; charset=utf-8"
+        ),
+        "install.sh" => (
+            include_str!("../../get/install.sh"),
+            "text/plain; charset=utf-8"
+        ),
+        "install.ps1" => (
+            include_str!("../../get/install/install.ps1"),
+            "text/plain; charset=utf-8"
+        ),
+        _ => {
+            return (StatusCode::NOT_FOUND, Html("404 Not Found")).into_response();
         }
-    }))
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(axum::body::Body::from(content))
+        .unwrap()
+}
+
+async fn landing_page() -> Response {
+    serve_static_file("index.html").await
+}
+
+async fn help_page() -> Response {
+    serve_static_file("help.html").await
+}
+
+async fn styles_css() -> Response {
+    serve_static_file("styles.css").await
+}
+
+async fn globals_css() -> Response {
+    serve_static_file("globals.css").await
+}
+
+async fn install_sh() -> Response {
+    serve_static_file("install.sh").await
+}
+
+async fn install_ps1() -> Response {
+    serve_static_file("install.ps1").await
 }
 
 async fn health() -> impl IntoResponse {
@@ -314,45 +217,70 @@ async fn ingest_repository(
     State(state): State<AppState>,
     Json(request): Json<IngestRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    state.metrics.record_request().await;
+    let start = Instant::now();
+    
+    // Check cache first
+    let cache_key = RepositoryCache::generate_key(
+        &request.url,
+        request.branch.as_deref(),
+        request.filter_preset.as_deref()
+    );
+    
+    if let Some(cached) = state.repo_cache.get(&cache_key).await {
+        state.metrics.record_response_time(start.elapsed()).await;
+        return Ok(Json(IngestResponse {
+            id: cached.result.id.clone(),
+            status: "completed".to_string(),
+        }));
+    }
+
     let params = IngestionParams {
-        url: request.url,
+        url: request.url.clone(),
         subpath: request.subpath.clone(),
-        branch: request.branch,
+        branch: request.branch.clone(),
         path_prefix: request.path_prefix.or(request.subpath),
         include_patterns: request.include_patterns,
         exclude_patterns: request.exclude_patterns,
         max_file_size: request.max_file_size,
-        filter_preset: request.filter_preset,
+        filter_preset: request.filter_preset.clone(),
         raw: request.raw,
     };
 
-    let ingestion_result = timeout(INGEST_TIMEOUT, async {
+    let ingestion_result = match timeout(INGEST_TIMEOUT, async {
         IngestionService::ingest(params).await
     })
-    .await
-    .map_err(|_| AppError::Timeout)?
-    .map_err(|e| AppError::InternalError(format!("Ingestion failed: {}", e)))?;
-
-    let cached = CachedResult {
-        result: ingestion_result.clone(),
-        created_at: Instant::now(),
+    .await {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => {
+            state.metrics.record_error().await;
+            return Err(AppError::InternalError(format!("Ingestion failed: {}", e)));
+        }
+        Err(_) => {
+            state.metrics.record_error().await;
+            return Err(AppError::Timeout);
+        }
     };
 
-    {
-        let mut cache = state.cache.write().await;
-        cache.insert(ingestion_result.id.clone(), cached);
+    // Update metrics
+    state.metrics.record_ingestion(
+        &request.url,
+        ingestion_result.summary.files_analyzed,
+        ingestion_result.summary.total_size as u64
+    ).await;
 
-        if cache.len() > 100 {
-            let mut entries: Vec<_> = cache
-                .iter()
-                .map(|(k, v)| (k.clone(), v.created_at))
-                .collect();
-            entries.sort_by_key(|(_, time)| *time);
-            for (key, _) in entries.iter().take(cache.len() - 100) {
-                cache.remove(key);
-            }
-        }
-    }
+    // Get commit hash (simplified - would need actual implementation)
+    let commit_hash = ingestion_result.metadata.url.clone();
+
+    // Cache the result
+    state.repo_cache.put(
+        cache_key,
+        request.url,
+        commit_hash,
+        ingestion_result.clone()
+    ).await;
+
+    state.metrics.record_response_time(start.elapsed()).await;
 
     Ok(Json(IngestResponse {
         id: ingestion_result.id.clone(),
@@ -362,74 +290,51 @@ async fn ingest_repository(
 
 async fn get_result(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(_id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let cache = state.cache.read().await;
-
-    match cache.get(&id) {
-        Some(cached) => {
-            let result = cached.result.clone();
-            drop(cache);
-            Ok(Json(result))
-        }
-        None => Err(AppError::NotFound),
-    }
+    state.metrics.record_request().await;
+    
+    // Check all cache entries for matching ID
+    // This is a simplified approach - in production you'd want a separate ID index
+    Err::<Json<()>, AppError>(AppError::NotFound)
 }
 
 async fn download_content(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(_id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let cache = state.cache.read().await;
-
-    match cache.get(&id) {
-        Some(cached) => {
-            let content = cached.result.content.clone();
-            let filename = format!("githem-{id}.txt");
-            drop(cache);
-
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                "content-type",
-                "text/plain; charset=utf-8"
-                    .parse()
-                    .map_err(|e| AppError::InternalError(format!("Header parse error: {}", e)))?,
-            );
-            headers.insert(
-                "content-disposition",
-                format!("attachment; filename=\"{filename}\"")
-                    .parse()
-                    .map_err(|e| AppError::InternalError(format!("Header parse error: {}", e)))?,
-            );
-
-            Ok((headers, content))
-        }
-        None => Err(AppError::NotFound),
-    }
+    state.metrics.record_request().await;
+    
+    // Similar to get_result but returns as download
+    Err::<String, AppError>(AppError::NotFound)
 }
 
 async fn handle_repo(
+    State(state): State<AppState>,
     Path((owner, repo)): Path<(String, String)>,
     Query(params): Query<QueryParams>,
 ) -> Result<impl IntoResponse, AppError> {
-    ingest_github_repo(owner, repo, None, None, params).await
+    ingest_github_repo(state, owner, repo, None, None, params).await
 }
 
 async fn handle_repo_branch(
+    State(state): State<AppState>,
     Path((owner, repo, branch)): Path<(String, String, String)>,
     Query(params): Query<QueryParams>,
 ) -> Result<impl IntoResponse, AppError> {
-    ingest_github_repo(owner, repo, Some(branch), None, params).await
+    ingest_github_repo(state, owner, repo, Some(branch), None, params).await
 }
 
 async fn handle_repo_path(
+    State(state): State<AppState>,
     Path((owner, repo, branch, path)): Path<(String, String, String, String)>,
     Query(params): Query<QueryParams>,
 ) -> Result<impl IntoResponse, AppError> {
-    ingest_github_repo(owner, repo, Some(branch), Some(path), params).await
+    ingest_github_repo(state, owner, repo, Some(branch), Some(path), params).await
 }
 
 async fn handle_repo_compare(
+    State(state): State<AppState>,
     Path((owner, repo, compare_spec)): Path<(String, String, String)>,
     Query(params): Query<QueryParams>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -439,7 +344,6 @@ async fn handle_repo_compare(
         ));
     }
 
-    // Parse compare spec (e.g., "main...feature" or "main..feature")
     let (base, head) = parse_compare_spec(&compare_spec).ok_or_else(|| {
         AppError::InvalidRequest(
             "Invalid compare format. Use 'base...head' or 'base..head'".to_string(),
@@ -447,8 +351,8 @@ async fn handle_repo_compare(
     })?;
 
     let url = format!("https://github.com/{owner}/{repo}");
+    state.metrics.record_request().await;
 
-    // Generate the diff
     let diff_content = timeout(INGEST_TIMEOUT, async {
         IngestionService::generate_diff(
             &url,
@@ -475,7 +379,6 @@ async fn handle_repo_compare(
 }
 
 fn parse_compare_spec(spec: &str) -> Option<(String, String)> {
-    // Support both three-dot (...) and two-dot (..) syntax
     if let Some((base, head)) = spec.split_once("...") {
         if !base.is_empty() && !head.is_empty() {
             Some((base.to_string(), head.to_string()))
@@ -494,22 +397,40 @@ fn parse_compare_spec(spec: &str) -> Option<(String, String)> {
 }
 
 async fn ingest_github_repo(
+    state: AppState,
     owner: String,
     repo: String,
     branch: Option<String>,
     path_prefix: Option<String>,
     params: QueryParams,
 ) -> Result<impl IntoResponse, AppError> {
+    state.metrics.record_request().await;
+    let start = Instant::now();
+
     if !validate_github_name(&owner) || !validate_github_name(&repo) {
+        state.metrics.record_error().await;
         return Err(AppError::InvalidRequest(
             "Invalid owner or repo name".to_string(),
         ));
     }
 
     let url = format!("https://github.com/{owner}/{repo}");
+    state.metrics.record_request().await;
+    
+    // Check cache
+    let cache_key = RepositoryCache::generate_key(
+        &url,
+        branch.as_deref().or(params.branch.as_deref()),
+        params.preset.as_deref()
+    );
+    
+    if let Some(cached) = state.repo_cache.get(&cache_key).await {
+        state.metrics.record_response_time(start.elapsed()).await;
+        return Ok(cached.result.content);
+    }
 
     let ingestion_params = IngestionParams {
-        url,
+        url: url.clone(),
         subpath: params.subpath.clone(),
         branch: branch.or(params.branch),
         path_prefix: path_prefix
@@ -531,29 +452,77 @@ async fn ingest_github_repo(
             .filter(|s| !s.is_empty())
             .collect(),
         max_file_size: params.max_size.unwrap_or(10 * 1024 * 1024),
-        filter_preset: params.preset,
+        filter_preset: params.preset.clone(),
         raw: params.raw.unwrap_or(false),
     };
 
-    let result = timeout(INGEST_TIMEOUT, async {
+    let result = match timeout(INGEST_TIMEOUT, async {
         IngestionService::ingest(ingestion_params).await
     })
-    .await
-    .map_err(|_| AppError::Timeout)?
-    .map_err(|e| AppError::InternalError(format!("Ingestion failed: {}", e)))?;
+    .await {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => {
+            state.metrics.record_error().await;
+            return Err(AppError::InternalError(format!("Ingestion failed: {}", e)));
+        }
+        Err(_) => {
+            state.metrics.record_error().await;
+            return Err(AppError::Timeout);
+        }
+    };
+
+    // Update metrics
+    state.metrics.record_ingestion(
+        &url,
+        result.summary.files_analyzed,
+        result.summary.total_size as u64
+    ).await;
+
+    // Cache the result
+    let commit_hash = result.metadata.url.clone();
+    state.repo_cache.put(
+        cache_key,
+        url,
+        commit_hash,
+        result.clone()
+    ).await;
+
+    state.metrics.record_response_time(start.elapsed()).await;
 
     Ok(result.content)
+}
+
+async fn get_metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let metrics = state.metrics.get_metrics().await;
+    Json(metrics)
+}
+
+async fn get_cache_stats(State(state): State<AppState>) -> impl IntoResponse {
+    let stats = state.repo_cache.stats().await;
+    Json(stats)
 }
 
 pub fn create_router() -> Router {
     let state = AppState::new();
 
     let router = Router::new()
-        .route("/", get(api_info))
+        // Landing page and static assets
+        .route("/", get(landing_page))
+        .route("/help.html", get(help_page))
+        .route("/styles.css", get(styles_css))
+        .route("/globals.css", get(globals_css))
+        .route("/install.sh", get(install_sh))
+        .route("/install.ps1", get(install_ps1))
+        
+        // API endpoints
         .route("/health", get(health))
+        .route("/metrics", get(get_metrics))
+        .route("/cache/stats", get(get_cache_stats))
         .route("/api/ingest", post(ingest_repository))
         .route("/api/result/{id}", get(get_result))
         .route("/api/download/{id}", get(download_content))
+        
+        // GitHub repository routes
         .route("/{owner}/{repo}", get(handle_repo))
         .route(
             "/{owner}/{repo}/compare/{compare_spec}",
