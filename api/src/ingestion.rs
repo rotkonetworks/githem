@@ -207,6 +207,7 @@ impl IngestionService {
     }
 }
 
+#[allow(dead_code)]
 pub struct WebSocketCallback<F>
 where
     F: FnMut(WebSocketMessage),
