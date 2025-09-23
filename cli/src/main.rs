@@ -21,7 +21,7 @@ struct Cli {
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// Include only files matching pattern
+    /// Include only files matching pattern (use trailing / for directories)
     #[arg(short, long)]
     include: Vec<String>,
 

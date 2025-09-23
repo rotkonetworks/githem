@@ -125,12 +125,18 @@ impl Ingester {
 
         if !self.options.include_patterns.is_empty() {
             return Ok(self.options.include_patterns.iter().any(|p| {
-                if !p.contains('/') {
+                // Handle directory patterns (ending with /)
+                if p.ends_with("/") {
+                    let dir_prefix = &p[..p.len()-1];
+                    path_str.starts_with(dir_prefix) && path_str.len() > dir_prefix.len()
+                } else if !p.contains('/') {
+                    // Pattern without path separator - match filename only
                     path.file_name()
                         .and_then(|n| n.to_str())
                         .map(|filename| glob_match(p, filename))
                         .unwrap_or(false)
                 } else {
+                    // Pattern with path separator - match full path
                     glob_match(p, &path_str)
                 }
             }));
