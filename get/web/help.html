@@ -29,7 +29,7 @@ githem https://github.com/owner/repo</code></pre>
             </tr>
             <tr>
                 <td><code>-i PATTERN</code></td>
-                <td>include patterns</td>
+                <td>include patterns (use / for directories)</td>
             </tr>
             <tr>
                 <td><code>-e PATTERN</code></td>
@@ -76,6 +76,9 @@ githem owner/repo --preset code-only
 # specific files
 githem . -i "*.rs" -e "tests/*"
 
+# include directories
+githem . -i "src/, api/, core/"
+
 # output to file
 githem owner/repo -o output.txt
 
@@ -114,6 +117,10 @@ curl "https://githem.com/owner/repo?preset=code-only"</code></pre>
         <div class="faq-item">
             <h4>token estimation?</h4>
             <p>~1 token per 4 characters, shown with --stats</p>
+        </div>
+        
+        <div style="text-align: center; margin-top: 3rem; padding-top: 2rem; border-top: 1px solid #3A4A3F; color: #9B8A7A;">
+            built by <a href="https://rotko.net" target="_blank" rel="noopener" style="color: var(--primary);">rotko networks</a>
         </div>
     </div>
 </body>
