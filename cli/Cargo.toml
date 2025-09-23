@@ -1,6 +1,6 @@
 [package]
 name = "githem"
-description = "Githem CLI - Git repository management tool"
+description = "Githem CLI - Tool to turn Git repositories into LLM ready text"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
