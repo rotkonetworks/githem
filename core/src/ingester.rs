@@ -124,7 +124,16 @@ impl Ingester {
         }
 
         if !self.options.include_patterns.is_empty() {
-            return Ok(self.options.include_patterns.iter().any(|p| glob_match(p, &path_str)));
+            return Ok(self.options.include_patterns.iter().any(|p| {
+                if !p.contains('/') {
+                    path.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|filename| glob_match(p, filename))
+                        .unwrap_or(false)
+                } else {
+                    glob_match(p, &path_str)
+                }
+            }));
         }
 
         Ok(true)
