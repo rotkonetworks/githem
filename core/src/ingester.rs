@@ -391,6 +391,20 @@ impl Ingester {
         let mut filtered_size = 0u64;
 
         for cached_file in &cache_entry.files {
+            // Apply path_prefix filter first if set
+            if let Some(ref prefix) = self.options.path_prefix {
+                let path_str = cached_file.path.to_string_lossy();
+                // Ensure we are checking directory boundaries properly
+                let prefix_with_slash = if prefix.ends_with("/") {
+                    prefix.to_string()
+                } else {
+                    format!("{}/", prefix)
+                };
+                if !path_str.starts_with(&prefix_with_slash) {
+                    continue;
+                }
+            }
+
             if !self.should_include(&cached_file.path)? {
                 continue;
             }
@@ -430,7 +444,10 @@ impl Ingester {
             .context("Repository has no working directory")?;
         let all_files = self.collect_all_repository_files()?;
 
-        let mut stats = FilterStats::default();
+        let mut stats = FilterStats {
+            total_files: all_files.len(),
+            ..Default::default()
+        };
         stats.total_files = all_files.len();
 
         for file in all_files {

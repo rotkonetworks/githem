@@ -45,7 +45,12 @@ impl RepositoryCache {
             .as_secs()
     }
 
-    pub fn generate_key(url: &str, branch: Option<&str>, preset: Option<&str>) -> String {
+    pub fn generate_key(
+        url: &str,
+        branch: Option<&str>,
+        preset: Option<&str>,
+        path: Option<&str>,
+    ) -> String {
         let mut hasher = Sha256::new();
         hasher.update(url.as_bytes());
         if let Some(branch) = branch {
@@ -55,6 +60,10 @@ impl RepositoryCache {
         if let Some(preset) = preset {
             hasher.update(b":");
             hasher.update(preset.as_bytes());
+        }
+        if let Some(path) = path {
+            hasher.update(b":");
+            hasher.update(path.as_bytes());
         }
         format!("{:x}", hasher.finalize())
     }

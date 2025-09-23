@@ -225,6 +225,7 @@ async fn ingest_repository(
         &request.url,
         request.branch.as_deref(),
         request.filter_preset.as_deref(),
+        request.path_prefix.as_deref(),
     );
 
     if let Some(cached) = state.repo_cache.get(&cache_key).await {
@@ -429,6 +430,11 @@ async fn ingest_github_repo(
         &url,
         branch.as_deref().or(params.branch.as_deref()),
         params.preset.as_deref(),
+        path_prefix
+            .as_ref()
+            .or(params.path.as_ref())
+            .or(params.subpath.as_ref())
+            .map(|s| s.as_str()),
     );
 
     if let Some(cached) = state.repo_cache.get(&cache_key).await {
