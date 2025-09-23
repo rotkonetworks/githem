@@ -12,7 +12,7 @@ pub use parser::{
     normalize_source_url, parse_github_url, validate_github_name, GitHubUrlType, ParsedGitHubUrl,
 };
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use git2::Repository;
 use serde::{Deserialize, Serialize};
 use std::io::IsTerminal;

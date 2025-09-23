@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 /// Centralized filtering configuration for githem
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct FilterConfig {
     /// Default exclude patterns applied unless raw mode is used
     pub default_excludes: Vec<String>,
@@ -28,14 +29,6 @@ pub struct FilterCategories {
     pub secrets: Vec<String>,
 }
 
-impl Default for FilterConfig {
-    fn default() -> Self {
-        Self {
-            default_excludes: Vec::new(), // Will be populated from categories
-            categories: FilterCategories::default(),
-        }
-    }
-}
 
 impl Default for FilterCategories {
     fn default() -> Self {

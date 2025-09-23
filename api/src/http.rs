@@ -31,6 +31,12 @@ pub struct CachedResult {
     pub created_at: Instant,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         Self {

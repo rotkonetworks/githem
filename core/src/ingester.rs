@@ -489,11 +489,9 @@ impl Ingester {
             .unwrap_or_else(|| "main".to_string());
 
         let mut branches = Vec::new();
-        for branch_result in repo.branches(Some(git2::BranchType::Local))? {
-            if let Ok((branch, _)) = branch_result {
-                if let Ok(Some(name)) = branch.name() {
-                    branches.push(name.to_string());
-                }
+        for (branch, _) in (repo.branches(Some(git2::BranchType::Local))?).flatten() {
+            if let Ok(Some(name)) = branch.name() {
+                branches.push(name.to_string());
             }
         }
 
