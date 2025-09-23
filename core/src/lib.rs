@@ -1,19 +1,23 @@
-pub mod filtering;
 pub mod cache;
-pub mod parser;
+pub mod filtering;
 pub mod ingester;
+pub mod parser;
 
-pub use filtering::{FilterPreset, FilterConfig, get_default_excludes, get_excludes_for_preset};
-pub use cache::{RepositoryCache, CacheEntry, CachedFile, CacheManager, CacheCommitStatus, CacheStats};
-pub use parser::{parse_github_url, ParsedGitHubUrl, GitHubUrlType, normalize_source_url, validate_github_name};
-pub use ingester::{Ingester, IngestOptions, FilterStats, IngestionCallback};
+pub use cache::{
+    CacheCommitStatus, CacheEntry, CacheManager, CacheStats, CachedFile, RepositoryCache,
+};
+pub use filtering::{get_default_excludes, get_excludes_for_preset, FilterConfig, FilterPreset};
+pub use ingester::{FilterStats, IngestOptions, Ingester, IngestionCallback};
+pub use parser::{
+    normalize_source_url, parse_github_url, validate_github_name, GitHubUrlType, ParsedGitHubUrl,
+};
 
 use anyhow::{Context, Result};
 use git2::Repository;
+use serde::{Deserialize, Serialize};
 use std::io::IsTerminal;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepositoryMetadata {
@@ -46,10 +50,12 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
 
     let mut fetch_opts = git2::FetchOptions::new();
     let mut callbacks = git2::RemoteCallbacks::new();
-    
+
     callbacks.credentials(|url, username_from_url, allowed_types| {
         if !is_remote_url(url) {
-            return Err(git2::Error::from_str("Invalid URL for credential authentication"));
+            return Err(git2::Error::from_str(
+                "Invalid URL for credential authentication",
+            ));
         }
 
         if allowed_types.contains(git2::CredentialType::SSH_KEY) {
@@ -62,7 +68,7 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
                 if ssh_dir.exists() {
                     let private_key = ssh_dir.join("id_ed25519");
                     let public_key = ssh_dir.join("id_ed25519.pub");
-                    
+
                     if private_key.exists() && public_key.exists() {
                         return git2::Cred::ssh_key(
                             username_from_url.unwrap_or("git"),
@@ -79,7 +85,9 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
             return git2::Cred::default();
         }
 
-        Err(git2::Error::from_str("No secure authentication method available"))
+        Err(git2::Error::from_str(
+            "No secure authentication method available",
+        ))
     });
 
     if std::io::stderr().is_terminal() {

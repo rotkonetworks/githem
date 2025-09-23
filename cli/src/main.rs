@@ -1,9 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
 use githem_core::{
-    IngestOptions, Ingester, checkout_branch, 
-    is_remote_url, FilterPreset, parse_github_url, GitHubUrlType,
-    CacheManager
+    checkout_branch, is_remote_url, parse_github_url, CacheManager, FilterPreset, GitHubUrlType,
+    IngestOptions, Ingester,
 };
 use std::fs;
 use std::io::{self, Write};
@@ -61,19 +60,19 @@ struct Cli {
     /// Show filtering statistics
     #[arg(long)]
     stats: bool,
-    
+
     /// Disable cache
     #[arg(long)]
     no_cache: bool,
-    
+
     /// Clear all cache
     #[arg(long)]
     clear_cache: bool,
-    
+
     /// Show cache statistics
     #[arg(long)]
     cache_stats: bool,
-    
+
     /// Force refresh (ignore cache)
     #[arg(long, short = 'f')]
     force: bool,
@@ -100,7 +99,7 @@ impl From<FilterPresetArg> for FilterPreset {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    
+
     // Handle cache management commands
     if cli.cache_stats {
         let stats = CacheManager::get_stats()?;
@@ -108,13 +107,15 @@ fn main() -> Result<()> {
         println!("─────────────────────");
         println!("Location: {}", stats.cache_dir.display());
         println!("Entries: {}", stats.total_entries);
-        println!("Size: {:.2} MB / {:.2} MB",
-                 stats.total_size as f64 / 1_048_576.0,
-                 stats.max_size as f64 / 1_048_576.0);
+        println!(
+            "Size: {:.2} MB / {:.2} MB",
+            stats.total_size as f64 / 1_048_576.0,
+            stats.max_size as f64 / 1_048_576.0
+        );
         println!("Expired: {}", stats.expired_entries);
         return Ok(());
     }
-    
+
     if cli.clear_cache {
         CacheManager::clear_cache()?;
         println!("✓ Cache cleared successfully");
@@ -124,16 +125,20 @@ fn main() -> Result<()> {
     }
 
     let parsed_result = parse_source(&cli.source);
-    
+
     match parsed_result {
         SourceType::Local(path) => handle_local_repo(path, cli),
         SourceType::GitUrl(url) => handle_git_url(url, cli),
-        SourceType::GitHub { owner, repo, branch, path, url_type } => {
-            match url_type {
-                GitHubUrlType::Compare => handle_compare(&owner, &repo, branch.as_deref(), cli),
-                _ => handle_github_repo(owner, repo, branch, path, cli),
-            }
-        }
+        SourceType::GitHub {
+            owner,
+            repo,
+            branch,
+            path,
+            url_type,
+        } => match url_type {
+            GitHubUrlType::Compare => handle_compare(&owner, &repo, branch.as_deref(), cli),
+            _ => handle_github_repo(owner, repo, branch, path, cli),
+        },
     }
 }
 
@@ -159,7 +164,7 @@ fn parse_source(source: &str) -> SourceType {
             url_type: parsed.url_type,
         };
     }
-    
+
     if !source.contains("://") && source.matches('/').count() == 1 {
         let parts: Vec<&str> = source.split('/').collect();
         if parts.len() == 2 {
@@ -172,7 +177,7 @@ fn parse_source(source: &str) -> SourceType {
             };
         }
     }
-    
+
     if !source.contains("://") && source.contains("/compare/") {
         let parts: Vec<&str> = source.splitn(4, '/').collect();
         if parts.len() == 4 && parts[2] == "compare" {
@@ -185,34 +190,34 @@ fn parse_source(source: &str) -> SourceType {
             };
         }
     }
-    
+
     if is_remote_url(source) {
         return SourceType::GitUrl(source.to_string());
     }
-    
+
     SourceType::Local(source.to_string())
 }
 
 fn handle_compare(owner: &str, repo: &str, compare_spec: Option<&str>, cli: Cli) -> Result<()> {
     let compare_spec = compare_spec.ok_or_else(|| anyhow::anyhow!("Compare spec is required"))?;
-    
+
     let (base, head) = parse_compare_spec(compare_spec)
         .ok_or_else(|| anyhow::anyhow!("Invalid compare format"))?;
-    
+
     let url = format!("https://github.com/{}/{}", owner, repo);
-    
+
     let options = create_ingest_options(&cli);
     let ingester = Ingester::from_url(&url, options)?;
-    
+
     let diff_content = ingester.generate_diff(&base, &head)?;
-    
+
     let mut output: Box<dyn io::Write> = match cli.output {
         Some(path) => Box::new(fs::File::create(path)?),
         None => Box::new(io::stdout()),
     };
-    
+
     write!(output, "{}", diff_content)?;
-    
+
     Ok(())
 }
 
@@ -224,11 +229,11 @@ fn handle_github_repo(
     cli: Cli,
 ) -> Result<()> {
     let url = format!("https://github.com/{}/{}", owner, repo);
-    
+
     let mut options = create_ingest_options(&cli);
     options.branch = branch.or(cli.branch.clone());
     options.path_prefix = path.or(cli.path_prefix.clone());
-    
+
     process_repository(&url, options, cli)
 }
 
@@ -282,7 +287,7 @@ fn process_repository(url: &str, options: IngestOptions, cli: Cli) -> Result<()>
     } else {
         Ingester::from_url_cached(url, options)?
     };
-    
+
     process_with_ingester(ingester, cli)
 }
 
@@ -341,15 +346,15 @@ fn write_header(output: &mut dyn io::Write, cli: &Cli) -> Result<()> {
     } else {
         "standard (smart filtering)"
     };
-    
+
     writeln!(output, "# Filter preset: {}", preset_name)?;
 
     if !cli.no_cache && !cli.force {
         writeln!(output, "# Cache: enabled (use --no-cache to disable)")?;
     }
-    
+
     writeln!(output)?;
-    
+
     Ok(())
 }
 
@@ -359,21 +364,28 @@ fn show_stats(ingester: &Ingester) -> Result<()> {
     println!("📊 Filtering Statistics");
     println!("─────────────────────────");
     println!("Total files found: {}", stats.total_files);
-    println!("Files to include: {} ({:.1}%)",
+    println!(
+        "Files to include: {} ({:.1}%)",
         stats.included_files,
         stats.inclusion_rate() * 100.0
     );
-    println!("Files excluded: {} ({:.1}%)",
+    println!(
+        "Files excluded: {} ({:.1}%)",
         stats.excluded_files,
         (1.0 - stats.inclusion_rate()) * 100.0
     );
     println!();
-    println!("Total size: {:.2} MB", stats.total_size as f64 / 1_048_576.0);
-    println!("Included size: {:.2} MB ({:.1}%)",
+    println!(
+        "Total size: {:.2} MB",
+        stats.total_size as f64 / 1_048_576.0
+    );
+    println!(
+        "Included size: {:.2} MB ({:.1}%)",
         stats.included_size as f64 / 1_048_576.0,
         (1.0 - stats.size_reduction()) * 100.0
     );
-    println!("Size reduction: {:.2} MB ({:.1}%)",
+    println!(
+        "Size reduction: {:.2} MB ({:.1}%)",
         stats.excluded_size as f64 / 1_048_576.0,
         stats.size_reduction() * 100.0
     );
@@ -383,16 +395,18 @@ fn show_stats(ingester: &Ingester) -> Result<()> {
 
 fn show_filtering_info(ingester: &Ingester) -> Result<()> {
     let stats = ingester.get_filter_stats()?;
-    eprintln!("ℹ️  Filtering: {} → {} files ({:.1}% reduction)",
+    eprintln!(
+        "ℹ️  Filtering: {} → {} files ({:.1}% reduction)",
         stats.total_files,
         stats.included_files,
         (1.0 - stats.inclusion_rate()) * 100.0
     );
-    eprintln!("ℹ️  Size: {:.2} MB → {:.2} MB ({:.1}% smaller)",
+    eprintln!(
+        "ℹ️  Size: {:.2} MB → {:.2} MB ({:.1}% smaller)",
         stats.total_size as f64 / 1_048_576.0,
         stats.included_size as f64 / 1_048_576.0,
         stats.size_reduction() * 100.0
     );
-    
+
     Ok(())
 }

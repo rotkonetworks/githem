@@ -61,21 +61,36 @@ pub fn parse_github_url(url: &str) -> Option<ParsedGitHubUrl> {
                         if all_parts.is_empty() {
                             return None;
                         }
-                        
+
                         let mut branch_end_idx = all_parts.len();
                         for (i, part) in all_parts.iter().enumerate() {
                             if part.contains('.') && !part.ends_with(".git") {
                                 branch_end_idx = i;
                                 break;
                             }
-                            if matches!(*part, "src" | "lib" | "test" | "tests" | "docs" | 
-                                               "bin" | "pkg" | "cmd" | "internal" | "api" | 
-                                               "web" | "client" | "server" | "assets" | "public") {
+                            if matches!(
+                                *part,
+                                "src"
+                                    | "lib"
+                                    | "test"
+                                    | "tests"
+                                    | "docs"
+                                    | "bin"
+                                    | "pkg"
+                                    | "cmd"
+                                    | "internal"
+                                    | "api"
+                                    | "web"
+                                    | "client"
+                                    | "server"
+                                    | "assets"
+                                    | "public"
+                            ) {
                                 branch_end_idx = i;
                                 break;
                             }
                         }
-                        
+
                         let branch = all_parts[..branch_end_idx].join("/");
                         let path = if branch_end_idx < all_parts.len() {
                             Some(all_parts[branch_end_idx..].join("/"))
@@ -88,7 +103,11 @@ pub fn parse_github_url(url: &str) -> Option<ParsedGitHubUrl> {
                             repo: repo.clone(),
                             branch: Some(branch),
                             path,
-                            url_type: if parts[2] == "tree" { GitHubUrlType::Tree } else { GitHubUrlType::Blob },
+                            url_type: if parts[2] == "tree" {
+                                GitHubUrlType::Tree
+                            } else {
+                                GitHubUrlType::Blob
+                            },
                             canonical_url: format!("https://github.com/{}/{}", owner, repo),
                         });
                     }
@@ -128,7 +147,7 @@ fn parse_gist_url(url: &str) -> Option<ParsedGitHubUrl> {
         .or_else(|| url.strip_prefix("http://gist.github.com/"))
     {
         let parts: Vec<&str> = path.split('/').collect();
-        
+
         if parts.len() == 1 {
             return Some(ParsedGitHubUrl {
                 owner: "anonymous".to_string(),
@@ -194,7 +213,7 @@ pub fn normalize_source_url(
         let final_path = path_prefix.or(parsed.path);
         return Ok((parsed.canonical_url, final_branch, final_path));
     }
-    
+
     if !source.contains("://") && source.matches('/').count() == 1 {
         let parts: Vec<&str> = source.split('/').collect();
         if parts.len() == 2 && validate_github_name(parts[0]) && validate_github_name(parts[1]) {
@@ -202,14 +221,16 @@ pub fn normalize_source_url(
             return Ok((url, branch, path_prefix));
         }
     }
-    
+
     Ok((source.to_string(), branch, path_prefix))
 }
 
 pub fn validate_github_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 39
-        && name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
         && !name.starts_with(['-', '.'])
         && !name.ends_with(['-', '.'])
 }

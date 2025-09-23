@@ -1,15 +1,15 @@
-use crate::ingestion::{IngestionService, IngestionParams, IngestionResult};
+use crate::ingestion::{IngestionParams, IngestionResult, IngestionService};
 use githem_core::validate_github_name;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::{
-    Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
+    Router,
 };
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
@@ -383,9 +383,12 @@ async fn download_content(
             drop(cache);
 
             let mut headers = HeaderMap::new();
-            headers.insert("content-type",
-                "text/plain; charset=utf-8".parse()
-                .map_err(|e| AppError::InternalError(format!("Header parse error: {}", e)))?);
+            headers.insert(
+                "content-type",
+                "text/plain; charset=utf-8"
+                    .parse()
+                    .map_err(|e| AppError::InternalError(format!("Header parse error: {}", e)))?,
+            );
             headers.insert(
                 "content-disposition",
                 format!("attachment; filename=\"{filename}\"")
@@ -424,19 +427,18 @@ async fn handle_repo_compare(
     Path((owner, repo, compare_spec)): Path<(String, String, String)>,
     Query(params): Query<QueryParams>,
 ) -> Result<impl IntoResponse, AppError> {
-    if !validate_github_name(&owner)
-        || !validate_github_name(&repo)
-    {
+    if !validate_github_name(&owner) || !validate_github_name(&repo) {
         return Err(AppError::InvalidRequest(
             "Invalid owner or repo name".to_string(),
         ));
     }
 
     // Parse compare spec (e.g., "main...feature" or "main..feature")
-    let (base, head) = parse_compare_spec(&compare_spec)
-        .ok_or_else(|| AppError::InvalidRequest(
-            "Invalid compare format. Use 'base...head' or 'base..head'".to_string()
-        ))?;
+    let (base, head) = parse_compare_spec(&compare_spec).ok_or_else(|| {
+        AppError::InvalidRequest(
+            "Invalid compare format. Use 'base...head' or 'base..head'".to_string(),
+        )
+    })?;
 
     let url = format!("https://github.com/{owner}/{repo}");
 
@@ -448,7 +450,8 @@ async fn handle_repo_compare(
             &head,
             params.include.as_deref(),
             params.exclude.as_deref(),
-        ).await
+        )
+        .await
     })
     .await
     .map_err(|_| AppError::Timeout)?
@@ -468,9 +471,17 @@ async fn handle_repo_compare(
 fn parse_compare_spec(spec: &str) -> Option<(String, String)> {
     // Support both three-dot (...) and two-dot (..) syntax
     if let Some((base, head)) = spec.split_once("...") {
-        if !base.is_empty() && !head.is_empty() { Some((base.to_string(), head.to_string())) } else { None }
+        if !base.is_empty() && !head.is_empty() {
+            Some((base.to_string(), head.to_string()))
+        } else {
+            None
+        }
     } else if let Some((base, head)) = spec.split_once("..") {
-        if !base.is_empty() && !head.is_empty() { Some((base.to_string(), head.to_string())) } else { None }
+        if !base.is_empty() && !head.is_empty() {
+            Some((base.to_string(), head.to_string()))
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -490,12 +501,14 @@ async fn ingest_github_repo(
     }
 
     let url = format!("https://github.com/{owner}/{repo}");
-    
+
     let ingestion_params = IngestionParams {
         url,
         subpath: params.subpath.clone(),
         branch: branch.or(params.branch),
-        path_prefix: path_prefix.or(params.path.clone()).or(params.subpath.clone())
+        path_prefix: path_prefix
+            .or(params.path.clone())
+            .or(params.subpath.clone())
             .filter(|p| !p.contains("..") && !p.starts_with('/')),
         include_patterns: params
             .include
@@ -536,7 +549,10 @@ pub fn create_router() -> Router {
         .route("/api/result/{id}", get(get_result))
         .route("/api/download/{id}", get(download_content))
         .route("/{owner}/{repo}", get(handle_repo))
-        .route("/{owner}/{repo}/compare/{compare_spec}", get(handle_repo_compare))
+        .route(
+            "/{owner}/{repo}/compare/{compare_spec}",
+            get(handle_repo_compare),
+        )
         .route("/{owner}/{repo}/tree/{branch}", get(handle_repo_branch))
         .route(
             "/{owner}/{repo}/tree/{branch}/{*path}",

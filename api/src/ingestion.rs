@@ -1,7 +1,6 @@
 use githem_core::{
-    IngestOptions, Ingester, is_remote_url,
-    IngestionCallback, FilterPreset, FilterStats,
-    normalize_source_url, estimate_tokens, count_files, generate_tree
+    count_files, estimate_tokens, generate_tree, is_remote_url, normalize_source_url, FilterPreset,
+    FilterStats, IngestOptions, Ingester, IngestionCallback,
 };
 
 use serde::{Deserialize, Serialize};
@@ -109,7 +108,7 @@ impl IngestionService {
         } else {
             ingester.ingest(&mut content)?;
         }
-        
+
         let content_str = String::from_utf8(content)?;
 
         let id = format!(
@@ -150,14 +149,17 @@ impl IngestionService {
             filter_stats,
         })
     }
-    
+
     pub fn normalize_params(params: IngestionParams) -> Result<IngestionParams, String> {
         if params.url.is_empty() {
             return Err("URL is required".to_string());
         }
 
-        let (normalized_url, final_branch, final_path_prefix) = 
-            normalize_source_url(&params.url, params.branch.clone(), params.path_prefix.clone())?;
+        let (normalized_url, final_branch, final_path_prefix) = normalize_source_url(
+            &params.url,
+            params.branch.clone(),
+            params.path_prefix.clone(),
+        )?;
 
         if !is_remote_url(&normalized_url) && !std::path::Path::new(&normalized_url).exists() {
             return Err("Invalid URL or path".to_string());
@@ -199,7 +201,7 @@ impl IngestionService {
         } else {
             return Err("Diff generation requires a remote URL".into());
         };
-        
+
         let diff_content = ingester.generate_diff(base, head)?;
         Ok(diff_content)
     }

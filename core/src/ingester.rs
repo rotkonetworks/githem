@@ -93,8 +93,8 @@ impl Ingester {
 
         ingester.cache = RepositoryCache::new().ok();
         ingester.cache_key = Some(RepositoryCache::generate_cache_key(
-                url,
-                options.branch.as_deref(),
+            url,
+            options.branch.as_deref(),
         ));
 
         Ok(ingester)
@@ -141,7 +141,10 @@ impl Ingester {
 
     pub fn ingest<W: Write>(&self, output: &mut W) -> Result<()> {
         let files = self.collect_filtered_files()?;
-        let workdir = self.repo.workdir().context("Repository has no working directory")?;
+        let workdir = self
+            .repo
+            .workdir()
+            .context("Repository has no working directory")?;
 
         let mut processed = 0;
         for file in files {
@@ -283,7 +286,6 @@ impl Ingester {
         Ok(files)
     }
 
-
     fn get_current_commit(&self) -> Result<String> {
         let head = self.repo.head()?;
         let commit = head.peel_to_commit()?;
@@ -291,7 +293,10 @@ impl Ingester {
     }
 
     fn fetch_and_cache(&mut self) -> Result<CacheEntry> {
-        let workdir = self.repo.workdir().context("Repository has no working directory")?;
+        let workdir = self
+            .repo
+            .workdir()
+            .context("Repository has no working directory")?;
         let commit_hash = self.get_current_commit()?;
         let mut files = Vec::new();
         let mut total_size = 0u64;
@@ -321,7 +326,11 @@ impl Ingester {
 
         let cache_entry = CacheEntry {
             repo_url: self.repo.path().to_string_lossy().to_string(),
-            branch: self.options.branch.clone().unwrap_or_else(|| "HEAD".to_string()),
+            branch: self
+                .options
+                .branch
+                .clone()
+                .unwrap_or_else(|| "HEAD".to_string()),
             commit_hash: commit_hash.clone(),
             files: files.clone(),
             metadata: CacheMetadata {
@@ -337,9 +346,11 @@ impl Ingester {
         if let Some(ref mut cache) = self.cache {
             if let Some(ref cache_key) = self.cache_key {
                 cache.put(cache_key.clone(), cache_entry.clone())?;
-                eprintln!("✓ Cached {} files ({:.2} MB)",
-                files.len(),
-                total_size as f64 / 1_048_576.0);
+                eprintln!(
+                    "✓ Cached {} files ({:.2} MB)",
+                    files.len(),
+                    total_size as f64 / 1_048_576.0
+                );
             }
         }
 
@@ -396,16 +407,21 @@ impl Ingester {
             filtered_size += cached_file.size;
         }
 
-        eprintln!("→ Filtered: {} files ({:.2} MB) from {} total",
-        processed,
-        filtered_size as f64 / 1_048_576.0,
-        cache_entry.metadata.total_files);
+        eprintln!(
+            "→ Filtered: {} files ({:.2} MB) from {} total",
+            processed,
+            filtered_size as f64 / 1_048_576.0,
+            cache_entry.metadata.total_files
+        );
 
         Ok(())
     }
 
     pub fn get_filter_stats(&self) -> Result<FilterStats> {
-        let workdir = self.repo.workdir().context("Repository has no working directory")?;
+        let workdir = self
+            .repo
+            .workdir()
+            .context("Repository has no working directory")?;
         let all_files = self.collect_all_repository_files()?;
 
         let mut stats = FilterStats::default();
@@ -443,7 +459,8 @@ impl Ingester {
         let head_tree = head_commit.tree()?;
 
         let mut diff_opts = git2::DiffOptions::new();
-        let diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut diff_opts))?;
+        let diff =
+            repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut diff_opts))?;
 
         let mut output = String::new();
         output.push_str(&format!("# Comparing {} to {}\n\n", base, head));
