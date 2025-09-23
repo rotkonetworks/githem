@@ -2,8 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Centralized filtering configuration for githem
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FilterConfig {
     /// Default exclude patterns applied unless raw mode is used
     pub default_excludes: Vec<String>,
@@ -28,7 +27,6 @@ pub struct FilterCategories {
     pub version_control: Vec<String>,
     pub secrets: Vec<String>,
 }
-
 
 impl Default for FilterCategories {
     fn default() -> Self {

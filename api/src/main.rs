@@ -1,7 +1,7 @@
 mod cache;
-mod metrics;
 mod http;
 mod ingestion;
+mod metrics;
 mod websocket;
 
 use anyhow::Result;

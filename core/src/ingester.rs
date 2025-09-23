@@ -127,7 +127,7 @@ impl Ingester {
             return Ok(self.options.include_patterns.iter().any(|p| {
                 // Handle directory patterns (ending with /)
                 if p.ends_with("/") {
-                    let dir_prefix = &p[..p.len()-1];
+                    let dir_prefix = &p[..p.len() - 1];
                     path_str.starts_with(dir_prefix) && path_str.len() > dir_prefix.len()
                 } else if !p.contains('/') {
                     // Pattern without path separator - match filename only

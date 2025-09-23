@@ -1,14 +1,14 @@
 use crate::cache::RepositoryCache;
-use crate::metrics::MetricsCollector;
 use crate::ingestion::{IngestionParams, IngestionService};
+use crate::metrics::MetricsCollector;
 use githem_core::validate_github_name;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Json, Html, Response},
+    http::{header, HeaderMap, StatusCode},
+    response::{Html, IntoResponse, Json, Response},
     routing::{get, post},
     Router,
 };
@@ -38,9 +38,9 @@ impl AppState {
         let metrics = Arc::new(MetricsCollector::new());
         Self {
             repo_cache: Arc::new(RepositoryCache::new(
-                5 * 1024 * 1024 * 1024, // 5GB
+                5 * 1024 * 1024 * 1024,    // 5GB
                 Duration::from_secs(3600), // 1 hour TTL
-                metrics.clone()
+                metrics.clone(),
             )),
             metrics,
         }
@@ -142,27 +142,27 @@ async fn serve_static_file(filename: &str) -> Response {
     let (content, content_type) = match filename {
         "index.html" | "" => (
             include_str!("../../get/web/index.html"),
-            "text/html; charset=utf-8"
+            "text/html; charset=utf-8",
         ),
         "help.html" => (
             include_str!("../../get/web/help.html"),
-            "text/html; charset=utf-8"
+            "text/html; charset=utf-8",
         ),
         "styles.css" => (
             include_str!("../../get/web/styles.css"),
-            "text/css; charset=utf-8"
+            "text/css; charset=utf-8",
         ),
         "globals.css" => (
             include_str!("../../get/web/globals.css"),
-            "text/css; charset=utf-8"
+            "text/css; charset=utf-8",
         ),
         "install.sh" => (
             include_str!("../../get/install.sh"),
-            "text/plain; charset=utf-8"
+            "text/plain; charset=utf-8",
         ),
         "install.ps1" => (
             include_str!("../../get/install/install.ps1"),
-            "text/plain; charset=utf-8"
+            "text/plain; charset=utf-8",
         ),
         _ => {
             return (StatusCode::NOT_FOUND, Html("404 Not Found")).into_response();
@@ -219,14 +219,14 @@ async fn ingest_repository(
 ) -> Result<impl IntoResponse, AppError> {
     state.metrics.record_request().await;
     let start = Instant::now();
-    
+
     // Check cache first
     let cache_key = RepositoryCache::generate_key(
         &request.url,
         request.branch.as_deref(),
-        request.filter_preset.as_deref()
+        request.filter_preset.as_deref(),
     );
-    
+
     if let Some(cached) = state.repo_cache.get(&cache_key).await {
         state.metrics.record_response_time(start.elapsed()).await;
         return Ok(Json(IngestResponse {
@@ -250,7 +250,8 @@ async fn ingest_repository(
     let ingestion_result = match timeout(INGEST_TIMEOUT, async {
         IngestionService::ingest(params).await
     })
-    .await {
+    .await
+    {
         Ok(Ok(result)) => result,
         Ok(Err(e)) => {
             state.metrics.record_error().await;
@@ -263,22 +264,28 @@ async fn ingest_repository(
     };
 
     // Update metrics
-    state.metrics.record_ingestion(
-        &request.url,
-        ingestion_result.summary.files_analyzed,
-        ingestion_result.summary.total_size as u64
-    ).await;
+    state
+        .metrics
+        .record_ingestion(
+            &request.url,
+            ingestion_result.summary.files_analyzed,
+            ingestion_result.summary.total_size as u64,
+        )
+        .await;
 
     // Get commit hash (simplified - would need actual implementation)
     let commit_hash = ingestion_result.metadata.url.clone();
 
     // Cache the result
-    state.repo_cache.put(
-        cache_key,
-        request.url,
-        commit_hash,
-        ingestion_result.clone()
-    ).await;
+    state
+        .repo_cache
+        .put(
+            cache_key,
+            request.url,
+            commit_hash,
+            ingestion_result.clone(),
+        )
+        .await;
 
     state.metrics.record_response_time(start.elapsed()).await;
 
@@ -293,7 +300,7 @@ async fn get_result(
     Path(_id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     state.metrics.record_request().await;
-    
+
     // Check all cache entries for matching ID
     // This is a simplified approach - in production you'd want a separate ID index
     Err::<Json<()>, AppError>(AppError::NotFound)
@@ -304,7 +311,7 @@ async fn download_content(
     Path(_id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     state.metrics.record_request().await;
-    
+
     // Similar to get_result but returns as download
     Err::<String, AppError>(AppError::NotFound)
 }
@@ -416,14 +423,14 @@ async fn ingest_github_repo(
 
     let url = format!("https://github.com/{owner}/{repo}");
     state.metrics.record_request().await;
-    
+
     // Check cache
     let cache_key = RepositoryCache::generate_key(
         &url,
         branch.as_deref().or(params.branch.as_deref()),
-        params.preset.as_deref()
+        params.preset.as_deref(),
     );
-    
+
     if let Some(cached) = state.repo_cache.get(&cache_key).await {
         state.metrics.record_response_time(start.elapsed()).await;
         return Ok(cached.result.content);
@@ -459,7 +466,8 @@ async fn ingest_github_repo(
     let result = match timeout(INGEST_TIMEOUT, async {
         IngestionService::ingest(ingestion_params).await
     })
-    .await {
+    .await
+    {
         Ok(Ok(result)) => result,
         Ok(Err(e)) => {
             state.metrics.record_error().await;
@@ -472,20 +480,21 @@ async fn ingest_github_repo(
     };
 
     // Update metrics
-    state.metrics.record_ingestion(
-        &url,
-        result.summary.files_analyzed,
-        result.summary.total_size as u64
-    ).await;
+    state
+        .metrics
+        .record_ingestion(
+            &url,
+            result.summary.files_analyzed,
+            result.summary.total_size as u64,
+        )
+        .await;
 
     // Cache the result
     let commit_hash = result.metadata.url.clone();
-    state.repo_cache.put(
-        cache_key,
-        url,
-        commit_hash,
-        result.clone()
-    ).await;
+    state
+        .repo_cache
+        .put(cache_key, url, commit_hash, result.clone())
+        .await;
 
     state.metrics.record_response_time(start.elapsed()).await;
 
@@ -518,7 +527,6 @@ pub fn create_router() -> Router {
         .route("/globals.css", get(globals_css))
         .route("/install.sh", get(install_sh))
         .route("/install.ps1", get(install_ps1))
-        
         // API endpoints
         .route("/health", get(health))
         .route("/metrics", get(get_metrics))
@@ -527,7 +535,6 @@ pub fn create_router() -> Router {
         .route("/api/ingest", post(ingest_repository))
         .route("/api/result/{id}", get(get_result))
         .route("/api/download/{id}", get(download_content))
-        
         // GitHub repository routes
         .route("/{owner}/{repo}", get(handle_repo))
         .route(
