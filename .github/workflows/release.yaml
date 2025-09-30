@@ -4,10 +4,6 @@ on:
     branches: [master]
     paths:
       - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '**/*.rs'
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 jobs:
@@ -24,15 +20,10 @@ jobs:
       - name: Check if version needs release
         id: check
         run: |
-          # determine version
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            VERSION="${{ github.ref_name }}"
-          else
-            VERSION="v$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)"
-          fi
+          VERSION="v$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
-          # always check if release exists
+          # check if release exists
           if gh release view "${VERSION}" >/dev/null 2>&1; then
             echo "Release ${VERSION} already exists"
             echo "should_release=false" >> $GITHUB_OUTPUT
@@ -45,7 +36,7 @@ jobs:
 
   create-tag:
     needs: check-version
-    if: needs.check-version.outputs.should_release == 'true' && !startsWith(github.ref, 'refs/tags/')
+    if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
