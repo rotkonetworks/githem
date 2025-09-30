@@ -24,24 +24,21 @@ jobs:
       - name: Check if version needs release
         id: check
         run: |
-          # if triggered by tag push, use that
+          # determine version
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             VERSION="${{ github.ref_name }}"
-            echo "version=${VERSION}" >> $GITHUB_OUTPUT
-            echo "should_release=true" >> $GITHUB_OUTPUT
           else
-            # extract version from Cargo.toml
-            VERSION=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
-            echo "version=v${VERSION}" >> $GITHUB_OUTPUT
-            
-            # check if release already exists (not just tag)
-            if gh release view "v${VERSION}" >/dev/null 2>&1; then
-              echo "Release v${VERSION} already exists"
-              echo "should_release=false" >> $GITHUB_OUTPUT
-            else
-              echo "Release v${VERSION} does not exist, will create"
-              echo "should_release=true" >> $GITHUB_OUTPUT
-            fi
+            VERSION="v$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+          # always check if release exists
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            echo "Release ${VERSION} already exists"
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          else
+            echo "Release ${VERSION} does not exist, will create"
+            echo "should_release=true" >> $GITHUB_OUTPUT
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -58,12 +55,11 @@ jobs:
       - name: Create and push tag
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
-          # only create tag if it doesn't exist
           if ! git rev-parse "${VERSION}" >/dev/null 2>&1; then
             git config user.name github-actions
             git config user.email github-actions@github.com
             git tag -a "${VERSION}" -m "Release ${VERSION}"
-            git push origin "${VERSION}"
+            git push origin "${VERSION}" || echo "tag already exists remotely"
           fi
 
   build-cli:
@@ -278,9 +274,9 @@ jobs:
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
-      - name: Create Release
+      - name: Create or update release
         run: |
-          # Collect all unique files to upload
+          # collect all unique files to upload
           FILES=()
           for file in githem-* *.sig; do
             if [[ -f "$file" ]]; then
@@ -288,13 +284,24 @@ jobs:
             fi
           done
 
-          # Remove duplicates and create release
           printf '%s\n' "${FILES[@]}" | sort -u > files_to_upload.txt
 
-          gh release create ${{ needs.check-version.outputs.version }} \
-            --title "Githem ${{ needs.check-version.outputs.version }}" \
-            --generate-notes \
-            $(cat files_to_upload.txt | tr '\n' ' ')
+          # idempotent release creation
+          if gh release view ${{ needs.check-version.outputs.version }} >/dev/null 2>&1; then
+            echo "release exists, uploading/replacing artifacts"
+            gh release upload ${{ needs.check-version.outputs.version }} \
+              --clobber \
+              $(cat files_to_upload.txt | tr '\n' ' ')
+          else
+            echo "creating new release"
+            gh release create ${{ needs.check-version.outputs.version }} \
+              --title "Githem ${{ needs.check-version.outputs.version }}" \
+              --generate-notes \
+              $(cat files_to_upload.txt | tr '\n' ' ') || \
+            gh release upload ${{ needs.check-version.outputs.version }} \
+              --clobber \
+              $(cat files_to_upload.txt | tr '\n' ' ')
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -309,10 +316,8 @@ jobs:
       - name: Check crates.io version
         id: check_crates
         run: |
-          # get local version
           LOCAL_VERSION=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
 
-          # check if already published
           if cargo search githem --limit 1 | grep -q "githem = \"${LOCAL_VERSION}\""; then
             echo "Version ${LOCAL_VERSION} already published to crates.io"
             echo "skip=true" >> $GITHUB_OUTPUT
@@ -324,7 +329,6 @@ jobs:
       - name: Publish to crates.io
         if: steps.check_crates.outputs.skip != 'true'
         run: |
-          # publish in dependency order
           cargo publish -p githem-core --locked || true
           sleep 30
           cargo publish -p githem-api --locked || true
