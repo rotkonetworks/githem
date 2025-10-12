@@ -556,7 +556,7 @@ dependencies = [
 
 [[package]]
 name = "githem"
-version = "0.4.0"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "githem-api"
-version = "0.4.0"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -589,7 +589,7 @@ dependencies = [
 
 [[package]]
 name = "githem-core"
-version = "0.4.0"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "bincode",

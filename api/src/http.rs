@@ -213,6 +213,18 @@ async fn health() -> impl IntoResponse {
     }))
 }
 
+async fn version() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "name": env!("CARGO_PKG_NAME"),
+        "repository": env!("CARGO_PKG_REPOSITORY"),
+        "build_time": env!("VERGEN_BUILD_TIMESTAMP", "unknown"),
+        "git_commit": env!("VERGEN_GIT_SHA", "unknown"),
+        "git_branch": env!("VERGEN_GIT_BRANCH", "unknown"),
+        "rust_version": env!("VERGEN_RUSTC_SEMVER", "unknown")
+    }))
+}
+
 async fn ingest_repository(
     State(state): State<AppState>,
     Json(request): Json<IngestRequest>,
