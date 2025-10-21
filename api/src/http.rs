@@ -218,10 +218,10 @@ async fn version() -> impl IntoResponse {
         "version": env!("CARGO_PKG_VERSION"),
         "name": env!("CARGO_PKG_NAME"),
         "repository": env!("CARGO_PKG_REPOSITORY"),
-        "build_time": env!("VERGEN_BUILD_TIMESTAMP", "unknown"),
-        "git_commit": env!("VERGEN_GIT_SHA", "unknown"),
-        "git_branch": env!("VERGEN_GIT_BRANCH", "unknown"),
-        "rust_version": env!("VERGEN_RUSTC_SEMVER", "unknown")
+        "build_time": option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("unknown"),
+        "git_commit": option_env!("VERGEN_GIT_SHA").unwrap_or("unknown"),
+        "git_branch": option_env!("VERGEN_GIT_BRANCH").unwrap_or("unknown"),
+        "rust_version": option_env!("VERGEN_RUSTC_SEMVER").unwrap_or("unknown")
     }))
 }
 
@@ -351,6 +351,48 @@ async fn handle_repo_path(
     Query(params): Query<QueryParams>,
 ) -> Result<impl IntoResponse, AppError> {
     ingest_github_repo(state, owner, repo, Some(branch), Some(path), params).await
+}
+
+async fn handle_pr(
+    State(state): State<AppState>,
+    Path((owner, repo, pr_number)): Path<(String, String, String)>,
+    Query(params): Query<QueryParams>,
+) -> Result<impl IntoResponse, AppError> {
+    if !validate_github_name(&owner) || !validate_github_name(&repo) {
+        return Err(AppError::InvalidRequest(
+            "Invalid owner or repo name".to_string(),
+        ));
+    }
+
+    let pr_num = pr_number.parse::<u32>().map_err(|_| {
+        AppError::InvalidRequest("Invalid PR number".to_string())
+    })?;
+
+    let url = format!("https://github.com/{owner}/{repo}");
+    state.metrics.record_request().await;
+
+    let diff_content = timeout(INGEST_TIMEOUT, async {
+        IngestionService::generate_pr_diff(
+            &url,
+            pr_num,
+            params.include.as_deref(),
+            params.exclude.as_deref(),
+        )
+        .await
+    })
+    .await
+    .map_err(|_| AppError::Timeout)?
+    .map_err(|e| AppError::InternalError(format!("Failed to generate PR diff: {}", e)))?;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        "text/plain; charset=utf-8"
+            .parse()
+            .map_err(|e| AppError::InternalError(format!("Header parse error: {}", e)))?,
+    );
+
+    Ok((headers, diff_content))
 }
 
 async fn handle_repo_compare(
@@ -555,6 +597,7 @@ pub fn create_router() -> Router {
         .route("/api/download/{id}", get(download_content))
         // GitHub repository routes
         .route("/{owner}/{repo}", get(handle_repo))
+        .route("/{owner}/{repo}/pull/{pr_number}", get(handle_pr))
         .route(
             "/{owner}/{repo}/compare/{compare_spec}",
             get(handle_repo_compare),

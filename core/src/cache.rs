@@ -15,12 +15,13 @@ pub struct CacheEntry {
     pub metadata: CacheMetadata,
     pub created_at: u64,
     pub last_accessed: u64,
+    pub repo_path: PathBuf, // Path to cloned repository on disk
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedFile {
     pub path: PathBuf,
-    pub content: Vec<u8>,
+    // REMOVED: pub content: Vec<u8>,  // Never store file contents in RAM!
     pub size: u64,
     pub is_binary: bool,
 }

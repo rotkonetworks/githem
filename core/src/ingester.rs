@@ -302,13 +302,17 @@ impl Ingester {
         let workdir = self
             .repo
             .workdir()
-            .context("Repository has no working directory")?;
+            .context("Repository has no working directory")?
+            .to_path_buf();
         let commit_hash = self.get_current_commit()?;
         let mut files = Vec::new();
         let mut total_size = 0u64;
 
         let all_files = self.collect_all_repository_files()?;
 
+        eprintln!("→ Indexing {} files...", all_files.len());
+
+        // Only store METADATA, never file contents
         for file_path in all_files {
             let full_path = workdir.join(&file_path);
 
@@ -317,18 +321,26 @@ impl Ingester {
             }
 
             let metadata = std::fs::metadata(&full_path)?;
-            let content = std::fs::read(&full_path)?;
-            let is_binary = content.iter().take(8000).any(|&b| b == 0);
-
             total_size += metadata.len();
 
+            // Quick check for binary files without loading entire file
+            let is_binary = {
+                use std::io::Read;
+                let mut file = std::fs::File::open(&full_path)?;
+                let mut buf = vec![0u8; 8192.min(metadata.len() as usize)];
+                let n = file.read(&mut buf)?;
+                buf[..n].contains(&0)
+            };
+
+            // Store only metadata - file content stays on disk
             files.push(CachedFile {
                 path: file_path,
-                content,
                 size: metadata.len(),
                 is_binary,
             });
         }
+
+        let total_files = files.len();
 
         let cache_entry = CacheEntry {
             repo_url: self.repo.path().to_string_lossy().to_string(),
@@ -338,23 +350,24 @@ impl Ingester {
                 .clone()
                 .unwrap_or_else(|| "HEAD".to_string()),
             commit_hash: commit_hash.clone(),
-            files: files.clone(),
+            files,
             metadata: CacheMetadata {
-                total_files: files.len(),
+                total_files,
                 total_size,
                 tree_hash: commit_hash.clone(),
-                cache_version: "1.0.0".to_string(),
+                cache_version: "2.0.0".to_string(), // Bumped version for streaming cache
             },
             created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
             last_accessed: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+            repo_path: workdir,
         };
 
         if let Some(ref mut cache) = self.cache {
             if let Some(ref cache_key) = self.cache_key {
                 cache.put(cache_key.clone(), cache_entry.clone())?;
                 eprintln!(
-                    "✓ Cached {} files ({:.2} MB)",
-                    files.len(),
+                    "✓ Indexed {} files ({:.2} MB) - contents remain on disk",
+                    cache_entry.files.len(),
                     total_size as f64 / 1_048_576.0
                 );
             }
@@ -413,10 +426,13 @@ impl Ingester {
                 continue;
             }
 
+            // Stream file content from disk - NEVER load into RAM
+            let full_path = cache_entry.repo_path.join(&cached_file.path);
             let content = if cached_file.is_binary {
                 "[Binary file]".to_string()
             } else {
-                String::from_utf8_lossy(&cached_file.content).to_string()
+                std::fs::read_to_string(&full_path)
+                    .unwrap_or_else(|_| "[Error reading file]".to_string())
             };
 
             writeln!(output, "=== {} ===", cached_file.path.display())?;
@@ -472,8 +488,19 @@ impl Ingester {
     pub fn generate_diff(&self, base: &str, head: &str) -> Result<String> {
         let repo = &self.repo;
 
-        let (base_object, _) = repo.revparse_ext(base)?;
-        let (head_object, _) = repo.revparse_ext(head)?;
+        // Try to resolve branch references, falling back to origin/* if local branch doesn't exist
+        let resolve_ref = |ref_name: &str| -> Result<git2::Object> {
+            repo.revparse_ext(ref_name)
+                .or_else(|_| {
+                    // Try with origin/ prefix if local branch not found
+                    repo.revparse_ext(&format!("origin/{}", ref_name))
+                })
+                .map(|(obj, _)| obj)
+                .with_context(|| format!("Failed to resolve reference: {}", ref_name))
+        };
+
+        let base_object = resolve_ref(base)?;
+        let head_object = resolve_ref(head)?;
 
         let base_commit = base_object.peel_to_commit()?;
         let head_commit = head_object.peel_to_commit()?;
@@ -487,6 +514,93 @@ impl Ingester {
 
         let mut output = String::new();
         output.push_str(&format!("# Comparing {} to {}\n\n", base, head));
+
+        let stats = diff.stats()?;
+        output.push_str(&format!("Files changed: {}\n", stats.files_changed()));
+        output.push_str(&format!("Insertions: {}\n", stats.insertions()));
+        output.push_str(&format!("Deletions: {}\n\n", stats.deletions()));
+
+        diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+            let content = std::str::from_utf8(line.content()).unwrap_or("[binary]");
+            output.push_str(content);
+            true
+        })?;
+
+        Ok(output)
+    }
+
+    pub fn generate_pr_diff(&self, pr_number: u32) -> Result<String> {
+        let repo = &self.repo;
+
+        // Fetch the PR ref and common base branches from GitHub
+        let mut remote = repo.find_remote("origin")
+            .context("Failed to find origin remote")?;
+
+        let pr_ref = format!("refs/pull/{}/head", pr_number);
+
+        eprintln!("→ Fetching PR #{} and base branches from GitHub...", pr_number);
+
+        // Fetch PR ref
+        let pr_refspec = format!("+{}:{}", pr_ref, pr_ref);
+        remote.fetch(&[&pr_refspec], None, None)
+            .context("Failed to fetch PR ref from GitHub")?;
+
+        // Fetch common base branches (ignore errors if they don't exist)
+        for branch in &["main", "master", "develop"] {
+            let branch_refspec = format!("+refs/heads/{}:refs/remotes/origin/{}", branch, branch);
+            let _ = remote.fetch(&[&branch_refspec], None, None);
+        }
+
+        // Get the PR head commit
+        let pr_ref_obj = repo.find_reference(&pr_ref)
+            .context("Failed to find PR ref after fetch")?;
+        let pr_commit = pr_ref_obj.peel_to_commit()
+            .context("Failed to peel PR ref to commit")?;
+
+        // Find a base branch and use merge base if available, otherwise use branch HEAD
+        let base_branches = ["main", "master", "develop"];
+        let mut base_info: Option<(String, git2::Commit)> = None;
+
+        for base_name in &base_branches {
+            let origin_ref = format!("origin/{}", base_name);
+
+            if let Ok((obj, _)) = repo.revparse_ext(&origin_ref) {
+                if let Ok(branch_commit) = obj.peel_to_commit() {
+                    eprintln!("→ Found base branch {} at {}", base_name, branch_commit.id());
+
+                    // Try to find merge base, fall back to branch HEAD
+                    let base_commit = if let Ok(merge_base_oid) = repo.merge_base(branch_commit.id(), pr_commit.id()) {
+                        if let Ok(merge_base_commit) = repo.find_commit(merge_base_oid) {
+                            eprintln!("→ Using merge base {}", merge_base_oid);
+                            merge_base_commit
+                        } else {
+                            eprintln!("→ Using {} HEAD (no merge base)", base_name);
+                            branch_commit
+                        }
+                    } else {
+                        eprintln!("→ Using {} HEAD (no common history)", base_name);
+                        branch_commit
+                    };
+
+                    base_info = Some((base_name.to_string(), base_commit));
+                    break;
+                }
+            }
+        }
+
+        let (base_name, base_commit) = base_info
+            .context("Could not find any base branch (main/master/develop)")?;
+
+        let base_tree = base_commit.tree()?;
+        let pr_tree = pr_commit.tree()?;
+
+        let mut diff_opts = git2::DiffOptions::new();
+        let diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&pr_tree), Some(&mut diff_opts))?;
+
+        let mut output = String::new();
+        output.push_str(&format!("# Pull Request #{}\n\n", pr_number));
+        output.push_str(&format!("Base: {} ({})\n", base_name, base_commit.id()));
+        output.push_str(&format!("Head: PR #{} ({})\n\n", pr_number, pr_commit.id()));
 
         let stats = diff.stats()?;
         output.push_str(&format!("Files changed: {}\n", stats.files_changed()));

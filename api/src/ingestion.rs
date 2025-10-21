@@ -205,6 +205,23 @@ impl IngestionService {
         let diff_content = ingester.generate_diff(base, head)?;
         Ok(diff_content)
     }
+
+    pub async fn generate_pr_diff(
+        url: &str,
+        pr_number: u32,
+        _include_patterns: Option<&str>,
+        _exclude_patterns: Option<&str>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let options = IngestOptions::default();
+        let ingester = if is_remote_url(url) {
+            Ingester::from_url(url, options)?
+        } else {
+            return Err("PR diff generation requires a remote URL".into());
+        };
+
+        let diff_content = ingester.generate_pr_diff(pr_number)?;
+        Ok(diff_content)
+    }
 }
 
 #[allow(dead_code)]
