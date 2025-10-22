@@ -39,6 +39,87 @@ pub fn is_remote_url(source: &str) -> bool {
         || source.starts_with("https://gist.githubusercontent.com/")
 }
 
+/// clone a bare repository and fetch only specific refs for comparison
+pub fn clone_for_compare(url: &str, base_ref: &str, head_ref: &str) -> Result<Repository> {
+    if !is_remote_url(url) {
+        return Err(anyhow::anyhow!("Invalid or unsafe URL"));
+    }
+
+    let temp_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let path = std::env::temp_dir().join(format!("githem-compare-{temp_id}"));
+
+    // create bare repository (no working tree, minimal disk usage)
+    let repo = Repository::init_bare(&path)?;
+
+    let mut remote = repo.remote("origin", url)?;
+
+    let mut fetch_opts = git2::FetchOptions::new();
+    let mut callbacks = git2::RemoteCallbacks::new();
+
+    callbacks.credentials(|url, username_from_url, allowed_types| {
+        if !is_remote_url(url) {
+            return Err(git2::Error::from_str(
+                "Invalid URL for credential authentication",
+            ));
+        }
+
+        if allowed_types.contains(git2::CredentialType::SSH_KEY) {
+            if let Ok(cred) = git2::Cred::ssh_key_from_agent(username_from_url.unwrap_or("git")) {
+                return Ok(cred);
+            }
+
+            if let Ok(home) = std::env::var("HOME") {
+                let ssh_dir = Path::new(&home).join(".ssh");
+                if ssh_dir.exists() {
+                    let private_key = ssh_dir.join("id_ed25519");
+                    let public_key = ssh_dir.join("id_ed25519.pub");
+
+                    if private_key.exists() && public_key.exists() {
+                        return git2::Cred::ssh_key(
+                            username_from_url.unwrap_or("git"),
+                            Some(&public_key),
+                            &private_key,
+                            None,
+                        );
+                    }
+                }
+            }
+        }
+
+        if allowed_types.contains(git2::CredentialType::DEFAULT) && url.starts_with("https://") {
+            return git2::Cred::default();
+        }
+
+        Err(git2::Error::from_str(
+            "No secure authentication method available",
+        ))
+    });
+
+    fetch_opts.remote_callbacks(callbacks);
+    fetch_opts.depth(1);
+    fetch_opts.download_tags(git2::AutotagOption::None);
+
+    // fetch only the two refs we need for comparison
+    let refspecs = vec![
+        format!("+refs/heads/{}:refs/remotes/origin/{}", base_ref, base_ref),
+        format!("+refs/heads/{}:refs/remotes/origin/{}", head_ref, head_ref),
+        format!("+refs/tags/{}:refs/tags/{}", base_ref, base_ref),
+        format!("+refs/tags/{}:refs/tags/{}", head_ref, head_ref),
+    ];
+
+    // try to fetch, ignoring errors for refs that don't exist
+    for refspec in &refspecs {
+        let _ = remote.fetch(&[refspec.as_str()], Some(&mut fetch_opts), None);
+    }
+
+    drop(remote); // drop remote to release borrow on repo
+
+    Ok(repo)
+}
+
 pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
     if !is_remote_url(url) {
         return Err(anyhow::anyhow!("Invalid or unsafe URL"));

@@ -517,22 +517,8 @@ impl Ingester {
     pub fn generate_diff(&self, base: &str, head: &str) -> Result<String> {
         let repo = &self.repo;
 
-        // Fetch branches and tags from remote if they don't exist locally
-        let mut remote = repo.find_remote("origin")
-            .context("Failed to find origin remote")?;
-
-        // Try fetching both as branches and tags
-        for ref_name in &[base, head] {
-            // try as branch
-            let branch_refspec = format!("+refs/heads/{}:refs/remotes/origin/{}", ref_name, ref_name);
-            let _ = remote.fetch(&[&branch_refspec], None, None);
-
-            // try as tag
-            let tag_refspec = format!("+refs/tags/{}:refs/tags/{}", ref_name, ref_name);
-            let _ = remote.fetch(&[&tag_refspec], None, None);
-        }
-
         // Try to resolve references (branches, tags, or commit hashes)
+        // refs should already be fetched by clone_for_compare
         let resolve_ref = |ref_name: &str| -> Result<git2::Object> {
             repo.revparse_ext(ref_name)
                 .or_else(|_| repo.revparse_ext(&format!("origin/{}", ref_name)))

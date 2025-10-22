@@ -195,12 +195,14 @@ impl IngestionService {
         _include_patterns: Option<&str>,
         _exclude_patterns: Option<&str>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let options = IngestOptions::default();
-        let ingester = if is_remote_url(url) {
-            Ingester::from_url(url, options)?
-        } else {
+        if !is_remote_url(url) {
             return Err("Diff generation requires a remote URL".into());
-        };
+        }
+
+        // use optimized clone that only fetches the two refs needed
+        let repo = githem_core::clone_for_compare(url, base, head)?;
+        let options = IngestOptions::default();
+        let ingester = Ingester::new(repo, options);
 
         let diff_content = ingester.generate_diff(base, head)?;
         Ok(diff_content)
