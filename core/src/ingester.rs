@@ -152,6 +152,10 @@ impl Ingester {
             .workdir()
             .context("Repository has no working directory")?;
 
+        // write file tree structure at the start
+        let tree_structure = crate::generate_tree_from_paths(&files);
+        write!(output, "{}", tree_structure)?;
+
         let mut processed = 0;
         for file in files {
             let full_path = workdir.join(&file);
@@ -202,7 +206,13 @@ impl Ingester {
             return Ok(());
         }
 
-        let content = std::fs::read_to_string(path).unwrap_or_else(|_| "[Binary file]".to_string());
+        let mut content = std::fs::read_to_string(path).unwrap_or_else(|_| "[binary file]".to_string());
+
+        // compress license files to save tokens
+        let path_str = relative.to_string_lossy();
+        if let Some(compressed) = crate::compress_license(&path_str, &content) {
+            content = compressed;
+        }
 
         writeln!(output, "=== {} ===", relative.display())?;
         writeln!(output, "{content}")?;
@@ -403,6 +413,9 @@ impl Ingester {
         let mut processed = 0;
         let mut filtered_size = 0u64;
 
+        // first pass: collect files that pass filtering for tree structure
+        let mut filtered_files = Vec::new();
+
         for cached_file in &cache_entry.files {
             // Apply path_prefix filter first if set
             if let Some(ref prefix) = self.options.path_prefix {
@@ -426,14 +439,30 @@ impl Ingester {
                 continue;
             }
 
+            filtered_files.push(cached_file);
+        }
+
+        // write file tree structure at the start
+        let paths: Vec<_> = filtered_files.iter().map(|f| &f.path).collect();
+        let tree_structure = crate::generate_tree_from_paths(&paths);
+        write!(output, "{}", tree_structure)?;
+
+        // second pass: write file contents
+        for cached_file in filtered_files {
             // Stream file content from disk - NEVER load into RAM
             let full_path = cache_entry.repo_path.join(&cached_file.path);
-            let content = if cached_file.is_binary {
-                "[Binary file]".to_string()
+            let mut content = if cached_file.is_binary {
+                "[binary file]".to_string()
             } else {
                 std::fs::read_to_string(&full_path)
-                    .unwrap_or_else(|_| "[Error reading file]".to_string())
+                    .unwrap_or_else(|_| "[error reading file]".to_string())
             };
+
+            // compress license files to save tokens
+            let path_str = cached_file.path.to_string_lossy();
+            if let Some(compressed) = crate::compress_license(&path_str, &content) {
+                content = compressed;
+            }
 
             writeln!(output, "=== {} ===", cached_file.path.display())?;
             writeln!(output, "{}", content)?;
@@ -487,6 +516,16 @@ impl Ingester {
 
     pub fn generate_diff(&self, base: &str, head: &str) -> Result<String> {
         let repo = &self.repo;
+
+        // Fetch branches from remote if they don't exist locally
+        let mut remote = repo.find_remote("origin")
+            .context("Failed to find origin remote")?;
+
+        // Fetch both branches
+        for branch_name in &[base, head] {
+            let refspec = format!("+refs/heads/{}:refs/remotes/origin/{}", branch_name, branch_name);
+            let _ = remote.fetch(&[&refspec], None, None); // Ignore errors if branch doesn't exist
+        }
 
         // Try to resolve branch references, falling back to origin/* if local branch doesn't exist
         let resolve_ref = |ref_name: &str| -> Result<git2::Object> {

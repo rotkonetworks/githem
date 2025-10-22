@@ -31,7 +31,9 @@ pub struct RepositoryMetadata {
 
 pub fn is_remote_url(source: &str) -> bool {
     source.starts_with("https://github.com/")
+        || source.starts_with("http://github.com/")
         || source.starts_with("https://gitlab.com/")
+        || source.starts_with("http://gitlab.com/")
         || source.starts_with("https://gist.github.com/")
         || source.starts_with("https://raw.githubusercontent.com/")
         || source.starts_with("https://gist.githubusercontent.com/")
@@ -162,6 +164,84 @@ pub fn estimate_tokens(content: &str) -> usize {
     ((chars as f32 / 3.3 + words as f32 * 0.75) / 2.0 + lines as f32 * 0.1) as usize
 }
 
+/// detect and compress common license files and headers into a single line
+pub fn compress_license(path: &str, content: &str) -> Option<String> {
+    let path_lower = path.to_lowercase();
+    let content_lower = content.to_lowercase();
+
+    // for dedicated license files
+    if path_lower.contains("license") || path_lower.contains("licence")
+        || path_lower.contains("copying") {
+
+        // mit license
+        if (content_lower.contains("permission is hereby granted, free of charge")
+            && content_lower.contains("mit license")) || (content_lower.contains("without restriction")
+            && content_lower.contains("above copyright notice")) {
+            return Some("[mit license - https://opensource.org/licenses/MIT]".to_string());
+        }
+
+        // apache 2.0
+        if content_lower.contains("apache license") && content_lower.contains("version 2.0") {
+            return Some("[apache license 2.0 - https://www.apache.org/licenses/LICENSE-2.0]".to_string());
+        }
+
+        // gpl v3
+        if content_lower.contains("gnu general public license") && content_lower.contains("version 3") {
+            return Some("[gnu gpl v3 - https://www.gnu.org/licenses/gpl-3.0.html]".to_string());
+        }
+
+        // gpl v2
+        if content_lower.contains("gnu general public license") && content_lower.contains("version 2") {
+            return Some("[gnu gpl v2 - https://www.gnu.org/licenses/gpl-2.0.html]".to_string());
+        }
+
+        // bsd 3-clause
+        if content_lower.contains("redistribution and use in source and binary forms")
+            && content_lower.contains("neither the name of") {
+            return Some("[bsd 3-clause license - https://opensource.org/licenses/BSD-3-Clause]".to_string());
+        }
+
+        // bsd 2-clause
+        if content_lower.contains("redistribution and use in source and binary forms")
+            && !content_lower.contains("neither the name of") {
+            return Some("[bsd 2-clause license - https://opensource.org/licenses/BSD-2-Clause]".to_string());
+        }
+
+        // isc license
+        if content_lower.contains("isc license") || (content_lower.contains("permission to use, copy, modify")
+            && content_lower.contains("and/or sell copies")) {
+            return Some("[isc license - https://opensource.org/licenses/ISC]".to_string());
+        }
+
+        // mozilla public license
+        if content_lower.contains("mozilla public license") && content_lower.contains("version 2.0") {
+            return Some("[mozilla public license 2.0 - https://www.mozilla.org/MPL/2.0/]".to_string());
+        }
+
+        // lgpl
+        if content_lower.contains("gnu lesser general public license") {
+            return Some("[gnu lgpl - https://www.gnu.org/licenses/lgpl.html]".to_string());
+        }
+
+        // agpl
+        if content_lower.contains("gnu affero general public license") {
+            return Some("[gnu agpl - https://www.gnu.org/licenses/agpl.html]".to_string());
+        }
+
+        // unlicense
+        if content_lower.contains("this is free and unencumbered software released into the public domain") {
+            return Some("[unlicense - public domain - https://unlicense.org/]".to_string());
+        }
+
+        // creative commons
+        if content_lower.contains("creative commons") {
+            return Some("[creative commons license - see repository for details]".to_string());
+        }
+    }
+
+    None
+}
+
 pub fn count_files(content: &str) -> usize {
     content.matches("=== ").count()
 }
@@ -176,4 +256,52 @@ pub fn generate_tree(content: &str) -> String {
         }
     }
     tree
+}
+
+/// generate a tree structure from a list of file paths
+pub fn generate_tree_from_paths<P: AsRef<Path>>(paths: &[P]) -> String {
+    use std::collections::BTreeMap;
+
+    // build directory tree structure
+    let mut tree: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for path in paths {
+        let path_str = path.as_ref().to_string_lossy().to_string();
+        let parts: Vec<&str> = path_str.split('/').collect();
+
+        if parts.len() == 1 {
+            // root level file
+            tree.entry(".".to_string())
+                .or_insert_with(Vec::new)
+                .push(path_str.clone());
+        } else {
+            // file in subdirectory
+            let dir = parts[..parts.len() - 1].join("/");
+            tree.entry(dir)
+                .or_insert_with(Vec::new)
+                .push(path_str.clone());
+        }
+    }
+
+    let mut output = String::new();
+    output.push_str("# File Structure\n\n");
+    output.push_str(&format!("Total files: {}\n\n", paths.len()));
+
+    // output directories and their files
+    for (dir, files) in tree {
+        if dir == "." {
+            for file in files {
+                output.push_str(&format!("  {}\n", file));
+            }
+        } else {
+            output.push_str(&format!("  {}/\n", dir));
+            for file in files {
+                let filename = file.split('/').last().unwrap_or(&file);
+                output.push_str(&format!("    {}\n", filename));
+            }
+        }
+    }
+
+    output.push_str("\n");
+    output
 }
