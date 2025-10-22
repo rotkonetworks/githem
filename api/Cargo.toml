@@ -17,7 +17,7 @@ default = []
 rate-limit = ["dep:tower_governor"]
 
 [dependencies]
-githem-core = { version = "0.4.0", path = "../core" }
+githem-core = { version = "0.5.0", path = "../core" }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
