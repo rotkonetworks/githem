@@ -116,8 +116,13 @@ h2 {
  margin-top: 2rem;
 }
 
+.try-input-wrapper {
+ display: flex;
+ gap: 0.5rem;
+}
+
 .input-box input {
- width: 100%;
+ flex: 1;
  background: var(--shadow);
  border: 1px solid #3A4A3F;
  color: var(--text-light);
@@ -131,6 +136,41 @@ h2 {
 .input-box input:focus {
  outline: none;
  border-color: var(--primary);
+}
+
+.btn-go {
+ padding: 0.6rem 1.2rem;
+ font-size: 0.9rem;
+}
+
+/* Preset chips */
+.preset-chips {
+ display: flex;
+ gap: 0.5rem;
+ margin-top: 0.75rem;
+}
+
+.chip {
+ background: var(--shadow);
+ border: 1px solid #3A4A3F;
+ color: #9B8A7A;
+ padding: 0.35rem 0.75rem;
+ border-radius: 16px;
+ font-size: 0.75rem;
+ cursor: pointer;
+ transition: all 0.2s;
+}
+
+.chip:hover {
+ border-color: var(--primary);
+ color: var(--text-light);
+}
+
+.chip.active {
+ background: var(--primary);
+ border-color: var(--primary);
+ color: var(--shadow);
+ font-weight: 600;
 }
 
 /* Examples section */
@@ -248,6 +288,144 @@ th {
 .faq-item h4 {
  color: var(--primary);
  margin-bottom: 0.5rem;
+}
+
+/* Help page navigation */
+.help-nav {
+ display: flex;
+ justify-content: space-between;
+ align-items: center;
+ margin-bottom: 2rem;
+ padding-bottom: 1rem;
+ border-bottom: 1px solid #3A4A3F;
+}
+
+.back-link {
+ color: var(--primary);
+ text-decoration: none;
+ font-weight: 500;
+}
+
+.back-link:hover {
+ text-decoration: underline;
+}
+
+.nav-links {
+ display: flex;
+ gap: 1.5rem;
+}
+
+.nav-links a {
+ color: #9B8A7A;
+ text-decoration: none;
+ font-size: 0.9rem;
+ transition: color 0.2s;
+}
+
+.nav-links a:hover {
+ color: var(--primary);
+}
+
+/* Help header */
+.help-header {
+ text-align: center;
+ margin-bottom: 3rem;
+}
+
+.tagline {
+ color: #9B8A7A;
+ font-size: 1.1rem;
+}
+
+.section-intro {
+ color: #9B8A7A;
+ margin-bottom: 1rem;
+}
+
+/* Preset grid */
+.preset-grid {
+ display: grid;
+ grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+ gap: 1rem;
+ margin: 1rem 0 2rem;
+}
+
+.preset-card {
+ background: var(--secondary);
+ border: 1px solid #3A4A3F;
+ border-radius: 8px;
+ padding: 1.25rem;
+ transition: all 0.2s;
+}
+
+.preset-card:hover {
+ border-color: var(--primary);
+}
+
+.preset-card.active {
+ border-color: var(--primary);
+ background: rgba(255, 107, 53, 0.1);
+}
+
+.preset-card h3 {
+ color: var(--primary);
+ margin-bottom: 0.5rem;
+ font-size: 1rem;
+}
+
+.preset-card p {
+ color: #9B8A7A;
+ font-size: 0.85rem;
+ margin: 0;
+}
+
+/* Footer */
+footer {
+ margin-top: 3rem;
+ padding-top: 2rem;
+ border-top: 1px solid #3A4A3F;
+ text-align: center;
+}
+
+.footer-links {
+ display: flex;
+ gap: 2rem;
+ justify-content: center;
+ margin-bottom: 1rem;
+}
+
+.footer-links a {
+ color: #9B8A7A;
+ text-decoration: none;
+ transition: color 0.2s;
+}
+
+.footer-links a:hover {
+ color: var(--primary);
+}
+
+.footer-credit {
+ color: #9B8A7A;
+ font-size: 0.9rem;
+}
+
+.footer-credit a {
+ color: var(--primary);
+ text-decoration: none;
+}
+
+/* Install group spacing */
+.install-group {
+ margin-bottom: 1rem;
+}
+
+/* Section spacing */
+section {
+ margin-bottom: 2rem;
+}
+
+section h2:first-child {
+ margin-top: 0;
 }
 
 /* Accessibility helpers */

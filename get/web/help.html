@@ -4,124 +4,217 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>githem help</title>
-    <meta name="description" content="githem CLI documentation">
-    <link rel="stylesheet" href="styles.css">
+    <meta name="description" content="githem CLI and API documentation - convert git repositories to LLM-ready text">
+    <link rel="icon" type="image/webp" href="https://raw.githubusercontent.com/rotkonetworks/githem/master/media/githem_logo.webp">
+    <link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
     <div class="container">
-        <div style="margin-bottom: 2rem;"><a href="index.html" style="color: var(--primary);">← back</a></div>
-        
-        <h1>githem</h1>
-        
-        <h2>install</h2>
-        <pre><code>curl -fsSL get.githem.com | sh</code></pre>
-        
-        <h2>usage</h2>
-        <pre><code>githem owner/repo
+        <nav class="help-nav">
+            <a href="index.html" class="back-link">&larr; back</a>
+            <div class="nav-links">
+                <a href="#cli">cli</a>
+                <a href="#api">api</a>
+                <a href="#presets">presets</a>
+                <a href="#faq">faq</a>
+            </div>
+        </nav>
+
+        <header class="help-header">
+            <h1>githem</h1>
+            <p class="tagline">convert any git repository to llm-ready text</p>
+        </header>
+
+        <section id="cli">
+            <h2>cli installation</h2>
+            <div class="install-group">
+                <div class="label">unix/linux/macos</div>
+                <pre><code>curl -fsSL get.githem.com | sh</code></pre>
+            </div>
+            <div class="install-group">
+                <div class="label">windows</div>
+                <pre><code>iwr -useb get.githem.com/install.ps1 | iex</code></pre>
+            </div>
+            <div class="install-group">
+                <div class="label">cargo</div>
+                <pre><code>cargo install githem</code></pre>
+            </div>
+
+            <h2>cli usage</h2>
+            <pre><code># remote repository
+githem owner/repo
+githem https://github.com/owner/repo
+
+# local directory
 githem .
-githem https://github.com/owner/repo</code></pre>
-        
-        <h2>options</h2>
-        <table>
-            <tr>
-                <td><code>-o FILE</code></td>
-                <td>output to file</td>
-            </tr>
-            <tr>
-                <td><code>-i PATTERN</code></td>
-                <td>include patterns (use / for directories)</td>
-            </tr>
-            <tr>
-                <td><code>-e PATTERN</code></td>
-                <td>exclude patterns</td>
-            </tr>
-            <tr>
-                <td><code>-b BRANCH</code></td>
-                <td>branch</td>
-            </tr>
-            <tr>
-                <td><code>--preset NAME</code></td>
-                <td>filter preset</td>
-            </tr>
-            <tr>
-                <td><code>--stats</code></td>
-                <td>show statistics</td>
-            </tr>
-        </table>
-        
-        <h2>presets</h2>
-        <table>
-            <tr>
-                <td><code>raw</code></td>
-                <td>no filtering</td>
-            </tr>
-            <tr>
-                <td><code>standard</code></td>
-                <td>default smart filtering</td>
-            </tr>
-            <tr>
-                <td><code>code-only</code></td>
-                <td>source code only</td>
-            </tr>
-            <tr>
-                <td><code>minimal</code></td>
-                <td>basic filtering</td>
-            </tr>
-        </table>
-        
-        <h2>examples</h2>
-        <pre><code># code only
+githem /path/to/repo</code></pre>
+
+            <h2>cli options</h2>
+            <table>
+                <tr><td><code>-o FILE</code></td><td>output to file</td></tr>
+                <tr><td><code>-i PATTERN</code></td><td>include patterns (use / suffix for directories)</td></tr>
+                <tr><td><code>-e PATTERN</code></td><td>exclude patterns</td></tr>
+                <tr><td><code>-b BRANCH</code></td><td>specify branch</td></tr>
+                <tr><td><code>--preset NAME</code></td><td>filter preset (see below)</td></tr>
+                <tr><td><code>--stats</code></td><td>show token statistics</td></tr>
+                <tr><td><code>--tree</code></td><td>show file tree only</td></tr>
+            </table>
+
+            <h2>cli examples</h2>
+            <pre><code># source code only
 githem owner/repo --preset code-only
 
-# specific files
+# specific files by pattern
 githem . -i "*.rs" -e "tests/*"
 
-# include directories
+# include multiple directories
 githem . -i "src/, api/, core/"
 
 # output to file
-githem owner/repo -o output.txt
+githem owner/repo -o context.txt
 
 # specific branch
 githem owner/repo -b develop
 
+# view commit diff
+githem owner/repo/commit/abc123f
+
 # compare branches
 githem owner/repo/compare/main...feature</code></pre>
-        
-        <h2>cache</h2>
-        <pre><code>githem --cache-stats
+        </section>
+
+        <section id="api">
+            <h2>api endpoints</h2>
+            <p class="section-intro">replace <code>github.com</code> with <code>githem.com</code> in any github url</p>
+
+            <table>
+                <tr><td><code>/{owner}/{repo}</code></td><td>full repository</td></tr>
+                <tr><td><code>/{owner}/{repo}/tree/{branch}</code></td><td>specific branch</td></tr>
+                <tr><td><code>/{owner}/{repo}/tree/{branch}/{path}</code></td><td>subdirectory</td></tr>
+                <tr><td><code>/{owner}/{repo}/blob/{branch}/{file}</code></td><td>specific file path</td></tr>
+                <tr><td><code>/{owner}/{repo}/commit/{sha}</code></td><td>commit diff</td></tr>
+                <tr><td><code>/{owner}/{repo}/compare/{base}...{head}</code></td><td>branch comparison</td></tr>
+                <tr><td><code>/{owner}/{repo}/pull/{number}</code></td><td>pull request diff</td></tr>
+                <tr><td><code>/{owner}/{repo}/releases/tag/{tag}</code></td><td>tag release</td></tr>
+            </table>
+
+            <h2>query parameters</h2>
+            <table>
+                <tr><td><code>?preset=</code></td><td>raw, standard, code-only, minimal</td></tr>
+                <tr><td><code>?include=</code></td><td>comma-separated include patterns</td></tr>
+                <tr><td><code>?exclude=</code></td><td>comma-separated exclude patterns</td></tr>
+                <tr><td><code>?branch=</code></td><td>branch name (alternative to /tree/)</td></tr>
+                <tr><td><code>?ctx=</code></td><td>diff context lines (like -U), defaults to 3</td></tr>
+            </table>
+
+            <h2>api examples</h2>
+            <pre><code># full repository
+curl https://githem.com/owner/repo
+
+# with preset
+curl "https://githem.com/owner/repo?preset=code-only"
+
+# filter by directory
+curl "https://githem.com/owner/repo?include=src/,lib/"
+
+# specific branch
+curl https://githem.com/owner/repo/tree/develop
+
+# subdirectory only
+curl https://githem.com/owner/repo/tree/main/src
+
+# commit diff (supports short sha)
+curl https://githem.com/owner/repo/commit/abc123f
+
+# commit diff with no context (like -U0)
+curl "https://githem.com/owner/repo/commit/abc123f?ctx=0"
+
+# compare branches
+curl https://githem.com/owner/repo/compare/main...feature
+
+# pull request
+curl https://githem.com/owner/repo/pull/123
+
+# api info endpoint
+curl https://githem.com/api</code></pre>
+
+            <h2>gitlab support</h2>
+            <p class="section-intro">githem also supports gitlab urls with <code>/-/</code> path format</p>
+            <pre><code>curl https://githem.com/gitlab-org/gitlab/-/commit/abc123
+curl https://githem.com/gitlab-org/gitlab/-/merge_requests/123</code></pre>
+        </section>
+
+        <section id="presets">
+            <h2>presets</h2>
+            <div class="preset-grid">
+                <div class="preset-card">
+                    <h3>raw</h3>
+                    <p>no filtering - all files included as-is</p>
+                </div>
+                <div class="preset-card">
+                    <h3>standard</h3>
+                    <p>smart filtering - excludes node_modules, build artifacts, media, binaries</p>
+                </div>
+                <div class="preset-card active">
+                    <h3>code-only</h3>
+                    <p>source code files only - great for code review</p>
+                </div>
+                <div class="preset-card">
+                    <h3>minimal</h3>
+                    <p>basic filtering with smaller output</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="cache">
+            <h2>cache management</h2>
+            <pre><code>githem --cache-stats
 githem --clear-cache
 githem owner/repo --no-cache</code></pre>
-        
-        <h2>api</h2>
-        <pre><code>curl https://githem.com/owner/repo
-curl "https://githem.com/owner/repo?preset=code-only"</code></pre>
-        
-        <h2>faq</h2>
-        
-        <div class="faq-item">
-            <h4>what files are filtered?</h4>
-            <p>node_modules, vendor, target, build artifacts, media, binaries, lock files</p>
-        </div>
-        
-        <div class="faq-item">
-            <h4>private repos?</h4>
-            <p>use ssh: <code>githem git@github.com:company/private.git</code></p>
-        </div>
-        
-        <div class="faq-item">
-            <h4>size reduction?</h4>
-            <p>typically 60-80% with standard preset</p>
-        </div>
-        
-        <div class="faq-item">
-            <h4>token estimation?</h4>
-            <p>~1 token per 4 characters, shown with --stats</p>
-        </div>
-        
-        <div style="text-align: center; margin-top: 3rem; padding-top: 2rem; border-top: 1px solid #3A4A3F; color: #9B8A7A;">
-            built by <a href="https://rotko.net" target="_blank" rel="noopener" style="color: var(--primary);">rotko networks</a>
-        </div>
+        </section>
+
+        <section id="faq">
+            <h2>faq</h2>
+
+            <div class="faq-item">
+                <h4>what files are filtered by default?</h4>
+                <p>node_modules, vendor, target, .git, build artifacts, media files (images, videos), binary files, lock files (package-lock.json, yarn.lock, etc.)</p>
+            </div>
+
+            <div class="faq-item">
+                <h4>how do i access private repositories?</h4>
+                <p>use ssh: <code>githem git@github.com:company/private.git</code></p>
+            </div>
+
+            <div class="faq-item">
+                <h4>what size reduction can i expect?</h4>
+                <p>typically 60-80% reduction with the standard preset. code-only preset usually achieves 80-95% reduction.</p>
+            </div>
+
+            <div class="faq-item">
+                <h4>how are tokens estimated?</h4>
+                <p>approximately 1 token per 4 characters. use <code>--stats</code> for exact counts.</p>
+            </div>
+
+            <div class="faq-item">
+                <h4>can i use short commit shas?</h4>
+                <p>yes! any sha with 7+ characters works: <code>/owner/repo/commit/abc123f</code></p>
+            </div>
+
+            <div class="faq-item">
+                <h4>is there rate limiting?</h4>
+                <p>the api has generous limits. for heavy usage, consider running your own instance.</p>
+            </div>
+        </section>
+
+        <footer>
+            <div class="footer-links">
+                <a href="https://github.com/rotkonetworks/githem" target="_blank" rel="noopener">github</a>
+                <a href="https://githem.com/api" target="_blank" rel="noopener">api info</a>
+                <a href="index.html">home</a>
+            </div>
+            <p class="footer-credit">built by <a href="https://rotko.net" target="_blank" rel="noopener">rotko networks</a></p>
+        </footer>
     </div>
 </body>
 </html>

@@ -61,11 +61,19 @@
       <section aria-labelledby="try-online">
           <div class="input-box">
               <label for="repo-input" class="label" id="try-online">try online</label>
-              <input type="text" 
-                     id="repo-input"
-                     placeholder="owner/repo" 
-                     aria-label="Enter GitHub repository in format owner/repo"
-                     onkeydown="if(event.key==='Enter') window.open('https://githem.com/' + this.value.replace(/.*github\.com\//, ''), '_blank')">
+              <div class="try-input-wrapper">
+                  <input type="text"
+                         id="repo-input"
+                         placeholder="owner/repo or paste github url"
+                         aria-label="Enter GitHub repository in format owner/repo or paste a GitHub URL"
+                         onkeydown="if(event.key==='Enter') goToRepo()">
+                  <button class="btn btn-primary btn-go" onclick="goToRepo()" aria-label="Go to repository">go</button>
+              </div>
+              <div class="preset-chips">
+                  <button class="chip" onclick="setPreset('')" data-preset="">standard</button>
+                  <button class="chip" onclick="setPreset('code-only')" data-preset="code-only">code-only</button>
+                  <button class="chip" onclick="setPreset('raw')" data-preset="raw">raw</button>
+              </div>
           </div>
       </section>
 
@@ -81,8 +89,8 @@
               <a href="https://githem.com/rotkonetworks/ircstore/tree/master/src" target="_blank" rel="noopener" class="example-box">
                   <span>ircstore/tree/master/src</span>
               </a>
-              <a href="https://githem.com/rotkonetworks/githem/compare/main...develop" target="_blank" rel="noopener" class="example-box">
-                  <span>githem/compare</span>
+              <a href="https://githem.com/tromp/AIT/commit/e1a518f" target="_blank" rel="noopener" class="example-box">
+                  <span>AIT/commit/e1a518f</span>
               </a>
           </div>
       </section>
@@ -98,6 +106,8 @@
   </main>
 
   <script>
+      let currentPreset = '';
+
       function copy(btn, text) {
           navigator.clipboard.writeText(text).then(() => {
               btn.textContent = 'copied';
@@ -112,6 +122,38 @@
               console.error('Failed to copy:', err);
           });
       }
+
+      function setPreset(preset) {
+          currentPreset = preset;
+          document.querySelectorAll('.chip').forEach(chip => {
+              chip.classList.toggle('active', chip.dataset.preset === preset);
+          });
+      }
+
+      function goToRepo() {
+          const input = document.getElementById('repo-input').value.trim();
+          if (!input) return;
+
+          // extract repo path from various github url formats
+          let path = input
+              .replace(/^https?:\/\/(www\.)?github\.com\//, '')
+              .replace(/^git@github\.com:/, '')
+              .replace(/\.git$/, '')
+              .replace(/\/$/, '');
+
+          if (!path) return;
+
+          let url = 'https://githem.com/' + path;
+          if (currentPreset) {
+              url += '?preset=' + currentPreset;
+          }
+          window.open(url, '_blank');
+      }
+
+      // initialize first chip as active
+      document.addEventListener('DOMContentLoaded', () => {
+          setPreset('');
+      });
   </script>
 </body>
 </html>
