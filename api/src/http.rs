@@ -1,4 +1,4 @@
-use crate::cache::RepositoryCache;
+use crate::cache::{CacheStatus, DiffCache, RepositoryCache};
 use crate::ingestion::{IngestionParams, IngestionService};
 use crate::metrics::MetricsCollector;
 use githem_core::validate_github_name;
@@ -24,6 +24,7 @@ const INGEST_TIMEOUT: Duration = Duration::from_secs(300);
 #[derive(Clone)]
 pub struct AppState {
     pub repo_cache: Arc<RepositoryCache>,
+    pub diff_cache: Arc<DiffCache>,
     pub metrics: Arc<MetricsCollector>,
 }
 
@@ -42,6 +43,7 @@ impl AppState {
                 Duration::from_secs(3600), // 1 hour TTL
                 metrics.clone(),
             )),
+            diff_cache: Arc::new(DiffCache::new(10000)), // 10k diff entries
             metrics,
         }
     }
@@ -78,6 +80,10 @@ pub struct IngestResponse {
 pub struct ErrorResponse {
     pub error: String,
     pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 #[derive(Debug)]
@@ -96,20 +102,26 @@ impl IntoResponse for AppError {
                 ErrorResponse {
                     error: msg,
                     code: "INVALID_REQUEST".to_string(),
+                    hint: Some("check the url format: /{owner}/{repo} or /{owner}/{repo}/tree/{branch}".to_string()),
+                    docs: Some("https://githem.com/help.html".to_string()),
                 },
             ),
             AppError::NotFound => (
                 StatusCode::NOT_FOUND,
                 ErrorResponse {
-                    error: "Resource not found".to_string(),
+                    error: "resource not found".to_string(),
                     code: "NOT_FOUND".to_string(),
+                    hint: Some("valid formats: /{owner}/{repo}, /{owner}/{repo}/tree/{branch}, /{owner}/{repo}/commit/{sha}".to_string()),
+                    docs: Some("https://githem.com/help.html".to_string()),
                 },
             ),
             AppError::Timeout => (
                 StatusCode::REQUEST_TIMEOUT,
                 ErrorResponse {
-                    error: "Request timed out".to_string(),
+                    error: "request timed out - repository may be too large".to_string(),
                     code: "TIMEOUT".to_string(),
+                    hint: Some("try using ?include=src/ to limit scope, or ?preset=code-only".to_string()),
+                    docs: Some("https://githem.com/help.html".to_string()),
                 },
             ),
             AppError::InternalError(msg) => (
@@ -117,6 +129,8 @@ impl IntoResponse for AppError {
                 ErrorResponse {
                     error: msg,
                     code: "INTERNAL_ERROR".to_string(),
+                    hint: None,
+                    docs: Some("https://github.com/rotkonetworks/githem/issues".to_string()),
                 },
             ),
         };
@@ -135,6 +149,8 @@ pub struct QueryParams {
     pub preset: Option<String>,
     pub raw: Option<bool>,
     pub path: Option<String>,
+    /// diff context lines (like git diff -U), defaults to 3
+    pub ctx: Option<u32>,
 }
 
 // Serve static files
@@ -200,19 +216,62 @@ async fn install_ps1() -> Response {
     serve_static_file("install.ps1").await
 }
 
-async fn health() -> impl IntoResponse {
+async fn health(State(state): State<AppState>) -> impl IntoResponse {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
 
+    let repo_cache_stats = state.repo_cache.stats().await;
+    let diff_cache_stats = state.diff_cache.stats().await;
+
     Json(serde_json::json!({
         "status": "ok",
         "timestamp": timestamp,
-        "version": env!("CARGO_PKG_VERSION")
+        "version": env!("CARGO_PKG_VERSION"),
+        "repo_cache": {
+            "entries": repo_cache_stats.entries,
+            "size_mb": repo_cache_stats.total_size / 1024 / 1024,
+            "hit_rate": format!("{:.1}%", repo_cache_stats.hit_rate * 100.0)
+        },
+        "diff_cache": {
+            "entries": diff_cache_stats.entries,
+            "size_kb": diff_cache_stats.total_size / 1024
+        }
     }))
 }
 
+async fn api_info() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "name": "githem",
+        "version": env!("CARGO_PKG_VERSION"),
+        "description": "convert git repositories to llm-ready text",
+        "endpoints": {
+            "repository": "/{owner}/{repo}",
+            "branch": "/{owner}/{repo}/tree/{branch}",
+            "path": "/{owner}/{repo}/tree/{branch}/{path}",
+            "commit": "/{owner}/{repo}/commit/{sha}",
+            "compare": "/{owner}/{repo}/compare/{base}...{head}",
+            "pull_request": "/{owner}/{repo}/pull/{number}"
+        },
+        "query_params": {
+            "preset": ["raw", "standard", "code-only", "minimal"],
+            "include": "comma-separated patterns (e.g. src/,lib/)",
+            "exclude": "comma-separated patterns (e.g. tests/,*.md)",
+            "branch": "branch name (alternative to /tree/{branch})"
+        },
+        "examples": [
+            "https://githem.com/owner/repo",
+            "https://githem.com/owner/repo?preset=code-only",
+            "https://githem.com/owner/repo/tree/main/src",
+            "https://githem.com/owner/repo/commit/abc123"
+        ],
+        "docs": "https://githem.com/help.html",
+        "source": "https://github.com/rotkonetworks/githem"
+    }))
+}
+
+#[allow(dead_code)]
 async fn version() -> impl IntoResponse {
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
@@ -295,6 +354,7 @@ async fn ingest_repository(
         .put(
             cache_key,
             request.url,
+            request.branch,
             commit_hash,
             ingestion_result.clone(),
         )
@@ -368,8 +428,21 @@ async fn handle_pr(
         AppError::InvalidRequest("Invalid PR number".to_string())
     })?;
 
-    let url = format!("https://github.com/{owner}/{repo}");
     state.metrics.record_request().await;
+
+    // check cache - PRs can change but cache for a short time
+    let context_suffix = params.ctx.map(|c| format!(":ctx{}", c)).unwrap_or_default();
+    let cache_key = DiffCache::generate_key("pr", &owner, &repo, &format!("{}{}", pr_number, context_suffix));
+    if let Some(cached) = state.diff_cache.get(&cache_key).await {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "content-type",
+            "text/plain; charset=utf-8".parse().unwrap(),
+        );
+        return Ok((headers, cached));
+    }
+
+    let url = format!("https://github.com/{owner}/{repo}");
 
     let diff_content = timeout(INGEST_TIMEOUT, async {
         IngestionService::generate_pr_diff(
@@ -377,12 +450,144 @@ async fn handle_pr(
             pr_num,
             params.include.as_deref(),
             params.exclude.as_deref(),
+            params.ctx,
         )
         .await
     })
     .await
     .map_err(|_| AppError::Timeout)?
     .map_err(|e| AppError::InternalError(format!("Failed to generate PR diff: {}", e)))?;
+
+    state.diff_cache.put(cache_key, diff_content.clone()).await;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        "text/plain; charset=utf-8"
+            .parse()
+            .map_err(|e| AppError::InternalError(format!("Header parse error: {}", e)))?,
+    );
+
+    Ok((headers, diff_content))
+}
+
+async fn handle_repo_tag(
+    State(state): State<AppState>,
+    Path((owner, repo, tag)): Path<(String, String, String)>,
+    Query(params): Query<QueryParams>,
+) -> Result<impl IntoResponse, AppError> {
+    // tag works just like a branch
+    ingest_github_repo(state, owner, repo, Some(tag), None, params).await
+}
+
+async fn handle_mr(
+    State(state): State<AppState>,
+    Path((owner, repo, mr_number)): Path<(String, String, String)>,
+    Query(params): Query<QueryParams>,
+) -> Result<impl IntoResponse, AppError> {
+    if !validate_github_name(&owner) || !validate_github_name(&repo) {
+        return Err(AppError::InvalidRequest(
+            "Invalid owner or repo name".to_string(),
+        ));
+    }
+
+    let mr_num = mr_number.parse::<u32>().map_err(|_| {
+        AppError::InvalidRequest("Invalid MR number".to_string())
+    })?;
+
+    state.metrics.record_request().await;
+
+    // check cache
+    let context_suffix = params.ctx.map(|c| format!(":ctx{}", c)).unwrap_or_default();
+    let cache_key = DiffCache::generate_key("mr", &owner, &repo, &format!("{}{}", mr_number, context_suffix));
+    if let Some(cached) = state.diff_cache.get(&cache_key).await {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "content-type",
+            "text/plain; charset=utf-8".parse().unwrap(),
+        );
+        return Ok((headers, cached));
+    }
+
+    let url = format!("https://gitlab.com/{owner}/{repo}");
+
+    let diff_content = timeout(INGEST_TIMEOUT, async {
+        IngestionService::generate_mr_diff(
+            &url,
+            mr_num,
+            params.include.as_deref(),
+            params.exclude.as_deref(),
+            params.ctx,
+        )
+        .await
+    })
+    .await
+    .map_err(|_| AppError::Timeout)?
+    .map_err(|e| AppError::InternalError(format!("Failed to generate MR diff: {}", e)))?;
+
+    state.diff_cache.put(cache_key, diff_content.clone()).await;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        "text/plain; charset=utf-8"
+            .parse()
+            .map_err(|e| AppError::InternalError(format!("Header parse error: {}", e)))?,
+    );
+
+    Ok((headers, diff_content))
+}
+
+async fn handle_commit(
+    State(state): State<AppState>,
+    Path((owner, repo, commit_sha)): Path<(String, String, String)>,
+    Query(params): Query<QueryParams>,
+) -> Result<impl IntoResponse, AppError> {
+    if !validate_github_name(&owner) || !validate_github_name(&repo) {
+        return Err(AppError::InvalidRequest(
+            "Invalid owner or repo name".to_string(),
+        ));
+    }
+
+    // validate commit sha format (7-40 hex chars)
+    if commit_sha.len() < 7 || commit_sha.len() > 40 || !commit_sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(AppError::InvalidRequest(
+            "Invalid commit SHA format".to_string(),
+        ));
+    }
+
+    state.metrics.record_request().await;
+
+    // check cache first - commits are immutable, but context param matters
+    let context_suffix = params.ctx.map(|c| format!(":ctx{}", c)).unwrap_or_default();
+    let cache_key = DiffCache::generate_key("commit", &owner, &repo, &format!("{}{}", commit_sha, context_suffix));
+    if let Some(cached) = state.diff_cache.get(&cache_key).await {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "content-type",
+            "text/plain; charset=utf-8".parse().unwrap(),
+        );
+        return Ok((headers, cached));
+    }
+
+    let url = format!("https://github.com/{owner}/{repo}");
+
+    let diff_content = timeout(INGEST_TIMEOUT, async {
+        IngestionService::generate_commit_diff(
+            &url,
+            &commit_sha,
+            params.include.as_deref(),
+            params.exclude.as_deref(),
+            params.ctx,
+        )
+        .await
+    })
+    .await
+    .map_err(|_| AppError::Timeout)?
+    .map_err(|e| AppError::InternalError(format!("Failed to generate commit diff: {}", e)))?;
+
+    // cache the result
+    state.diff_cache.put(cache_key, diff_content.clone()).await;
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -412,8 +617,21 @@ async fn handle_repo_compare(
         )
     })?;
 
-    let url = format!("https://github.com/{owner}/{repo}");
     state.metrics.record_request().await;
+
+    // check cache
+    let context_suffix = params.ctx.map(|c| format!(":ctx{}", c)).unwrap_or_default();
+    let cache_key = DiffCache::generate_key("compare", &owner, &repo, &format!("{}{}", compare_spec, context_suffix));
+    if let Some(cached) = state.diff_cache.get(&cache_key).await {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "content-type",
+            "text/plain; charset=utf-8".parse().unwrap(),
+        );
+        return Ok((headers, cached));
+    }
+
+    let url = format!("https://github.com/{owner}/{repo}");
 
     let diff_content = timeout(INGEST_TIMEOUT, async {
         IngestionService::generate_diff(
@@ -422,12 +640,15 @@ async fn handle_repo_compare(
             &head,
             params.include.as_deref(),
             params.exclude.as_deref(),
+            params.ctx,
         )
         .await
     })
     .await
     .map_err(|_| AppError::Timeout)?
     .map_err(|e| AppError::InternalError(format!("Failed to generate diff: {}", e)))?;
+
+    state.diff_cache.put(cache_key, diff_content.clone()).await;
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -477,12 +698,12 @@ async fn ingest_github_repo(
     }
 
     let url = format!("https://github.com/{owner}/{repo}");
-    state.metrics.record_request().await;
+    let effective_branch = branch.clone().or(params.branch.clone());
 
-    // Check cache
+    // Check cache with smart validation
     let cache_key = RepositoryCache::generate_key(
         &url,
-        branch.as_deref().or(params.branch.as_deref()),
+        effective_branch.as_deref(),
         params.preset.as_deref(),
         path_prefix
             .as_ref()
@@ -491,15 +712,45 @@ async fn ingest_github_repo(
             .map(|s| s.as_str()),
     );
 
-    if let Some(cached) = state.repo_cache.get(&cache_key).await {
-        state.metrics.record_response_time(start.elapsed()).await;
-        return Ok(cached.result.content);
+    let (cache_status, cached_commit) = state.repo_cache.check_status(&cache_key).await;
+
+    match cache_status {
+        CacheStatus::Fresh => {
+            // < 5 min old, serve immediately
+            if let Some(cached) = state.repo_cache.get(&cache_key).await {
+                state.metrics.record_response_time(start.elapsed()).await;
+                return Ok(cached.result.content);
+            }
+        }
+        CacheStatus::Valid => {
+            // 5min-24h old, validate commit hash
+            if let Some(cached_hash) = cached_commit {
+                // quick ls-remote check
+                if let Ok(current_hash) = githem_core::get_remote_head(&url, effective_branch.as_deref()) {
+                    if current_hash == cached_hash {
+                        // commit unchanged, serve cached and update validation time
+                        state.repo_cache.mark_validated(&cache_key).await;
+                        if let Some(cached) = state.repo_cache.get(&cache_key).await {
+                            state.metrics.record_response_time(start.elapsed()).await;
+                            return Ok(cached.result.content);
+                        }
+                    } else {
+                        // commit changed, invalidate cache
+                        state.repo_cache.invalidate(&cache_key).await;
+                    }
+                }
+                // if ls-remote fails, fall through to full fetch
+            }
+        }
+        CacheStatus::Expired | CacheStatus::Stale | CacheStatus::Miss => {
+            // need fresh fetch
+        }
     }
 
     let ingestion_params = IngestionParams {
         url: url.clone(),
         subpath: params.subpath.clone(),
-        branch: branch.or(params.branch),
+        branch: branch.clone().or(params.branch.clone()),
         path_prefix: path_prefix
             .or(params.path.clone())
             .or(params.subpath.clone())
@@ -549,11 +800,13 @@ async fn ingest_github_repo(
         )
         .await;
 
-    // Cache the result
-    let commit_hash = result.metadata.url.clone();
+    // Cache the result with commit hash
+    // TODO: get actual commit hash from ingestion result
+    let commit_hash = githem_core::get_remote_head(&url, effective_branch.as_deref())
+        .unwrap_or_else(|_| result.metadata.url.clone());
     state
         .repo_cache
-        .put(cache_key, url, commit_hash, result.clone())
+        .put(cache_key, url, effective_branch, commit_hash, result.clone())
         .await;
 
     state.metrics.record_response_time(start.elapsed()).await;
@@ -588,6 +841,7 @@ pub fn create_router() -> Router {
         .route("/install.sh", get(install_sh))
         .route("/install.ps1", get(install_ps1))
         // API endpoints
+        .route("/api", get(api_info))
         .route("/health", get(health))
         .route("/metrics", get(get_metrics))
         .route("/api/metrics/top", get(get_top_repos))
@@ -598,6 +852,7 @@ pub fn create_router() -> Router {
         // GitHub repository routes
         .route("/{owner}/{repo}", get(handle_repo))
         .route("/{owner}/{repo}/pull/{pr_number}", get(handle_pr))
+        .route("/{owner}/{repo}/commit/{commit_sha}", get(handle_commit))
         .route(
             "/{owner}/{repo}/compare/{compare_spec}",
             get(handle_repo_compare),
@@ -606,6 +861,40 @@ pub fn create_router() -> Router {
         .route(
             "/{owner}/{repo}/tree/{branch}/{*path}",
             get(handle_repo_path),
+        )
+        // blob routes (same as tree, just different github url pattern)
+        .route("/{owner}/{repo}/blob/{branch}", get(handle_repo_branch))
+        .route(
+            "/{owner}/{repo}/blob/{branch}/{*path}",
+            get(handle_repo_path),
+        )
+        // releases/tags
+        .route(
+            "/{owner}/{repo}/releases/tag/{tag}",
+            get(handle_repo_tag),
+        )
+        // gitlab routes (uses /-/ separator)
+        .route("/{owner}/{repo}/-/tree/{branch}", get(handle_repo_branch))
+        .route(
+            "/{owner}/{repo}/-/tree/{branch}/{*path}",
+            get(handle_repo_path),
+        )
+        .route("/{owner}/{repo}/-/blob/{branch}", get(handle_repo_branch))
+        .route(
+            "/{owner}/{repo}/-/blob/{branch}/{*path}",
+            get(handle_repo_path),
+        )
+        .route(
+            "/{owner}/{repo}/-/commit/{commit_sha}",
+            get(handle_commit),
+        )
+        .route(
+            "/{owner}/{repo}/-/compare/{compare_spec}",
+            get(handle_repo_compare),
+        )
+        .route(
+            "/{owner}/{repo}/-/merge_requests/{mr_number}",
+            get(handle_mr),
         )
         .with_state(state);
 

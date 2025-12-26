@@ -194,6 +194,7 @@ impl IngestionService {
         head: &str,
         _include_patterns: Option<&str>,
         _exclude_patterns: Option<&str>,
+        context_lines: Option<u32>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         if !is_remote_url(url) {
             return Err("Diff generation requires a remote URL".into());
@@ -204,7 +205,26 @@ impl IngestionService {
         let options = IngestOptions::default();
         let ingester = Ingester::new(repo, options);
 
-        let diff_content = ingester.generate_diff(base, head)?;
+        let diff_content = ingester.generate_diff(base, head, context_lines)?;
+        Ok(diff_content)
+    }
+
+    pub async fn generate_commit_diff(
+        url: &str,
+        commit_sha: &str,
+        _include_patterns: Option<&str>,
+        _exclude_patterns: Option<&str>,
+        context_lines: Option<u32>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        if !is_remote_url(url) {
+            return Err("Commit diff generation requires a remote URL".into());
+        }
+
+        let repo = githem_core::clone_for_commit(url, commit_sha)?;
+        let options = IngestOptions::default();
+        let ingester = Ingester::new(repo, options);
+
+        let diff_content = ingester.generate_commit_diff(commit_sha, context_lines)?;
         Ok(diff_content)
     }
 
@@ -213,6 +233,7 @@ impl IngestionService {
         pr_number: u32,
         _include_patterns: Option<&str>,
         _exclude_patterns: Option<&str>,
+        context_lines: Option<u32>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let options = IngestOptions::default();
         let ingester = if is_remote_url(url) {
@@ -221,7 +242,25 @@ impl IngestionService {
             return Err("PR diff generation requires a remote URL".into());
         };
 
-        let diff_content = ingester.generate_pr_diff(pr_number)?;
+        let diff_content = ingester.generate_pr_diff(pr_number, context_lines)?;
+        Ok(diff_content)
+    }
+
+    pub async fn generate_mr_diff(
+        url: &str,
+        mr_number: u32,
+        _include_patterns: Option<&str>,
+        _exclude_patterns: Option<&str>,
+        context_lines: Option<u32>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let options = IngestOptions::default();
+        let ingester = if is_remote_url(url) {
+            Ingester::from_url(url, options)?
+        } else {
+            return Err("MR diff generation requires a remote URL".into());
+        };
+
+        let diff_content = ingester.generate_mr_diff(mr_number, context_lines)?;
         Ok(diff_content)
     }
 }

@@ -120,6 +120,73 @@ pub fn clone_for_compare(url: &str, base_ref: &str, head_ref: &str) -> Result<Re
     Ok(repo)
 }
 
+/// clone a repository with full history for commit diffing
+/// unlike clone_repository, this doesn't use depth=1 because we need
+/// the full history to resolve short SHAs and access parent commits
+pub fn clone_for_commit(url: &str, _commit_sha: &str) -> Result<Repository> {
+    if !is_remote_url(url) {
+        return Err(anyhow::anyhow!("Invalid or unsafe URL"));
+    }
+
+    let temp_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let path = std::env::temp_dir().join(format!("githem-commit-{temp_id}"));
+
+    let mut fetch_opts = git2::FetchOptions::new();
+    let mut callbacks = git2::RemoteCallbacks::new();
+
+    callbacks.credentials(|url, username_from_url, allowed_types| {
+        if !is_remote_url(url) {
+            return Err(git2::Error::from_str(
+                "Invalid URL for credential authentication",
+            ));
+        }
+
+        if allowed_types.contains(git2::CredentialType::SSH_KEY) {
+            if let Ok(cred) = git2::Cred::ssh_key_from_agent(username_from_url.unwrap_or("git")) {
+                return Ok(cred);
+            }
+
+            if let Ok(home) = std::env::var("HOME") {
+                let ssh_dir = Path::new(&home).join(".ssh");
+                if ssh_dir.exists() {
+                    let private_key = ssh_dir.join("id_ed25519");
+                    let public_key = ssh_dir.join("id_ed25519.pub");
+
+                    if private_key.exists() && public_key.exists() {
+                        return git2::Cred::ssh_key(
+                            username_from_url.unwrap_or("git"),
+                            Some(&public_key),
+                            &private_key,
+                            None,
+                        );
+                    }
+                }
+            }
+        }
+
+        if allowed_types.contains(git2::CredentialType::DEFAULT) && url.starts_with("https://") {
+            return git2::Cred::default();
+        }
+
+        Err(git2::Error::from_str(
+            "No secure authentication method available",
+        ))
+    });
+
+    fetch_opts.remote_callbacks(callbacks);
+    // no depth limit - we need full history for commit lookups
+    fetch_opts.download_tags(git2::AutotagOption::None);
+
+    let mut builder = git2::build::RepoBuilder::new();
+    builder.fetch_options(fetch_opts);
+
+    let repo = builder.clone(url, &path)?;
+    Ok(repo)
+}
+
 pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
     if !is_remote_url(url) {
         return Err(anyhow::anyhow!("Invalid or unsafe URL"));
@@ -205,6 +272,61 @@ pub fn clone_repository(url: &str, branch: Option<&str>) -> Result<Repository> {
     }
 
     Ok(repo)
+}
+
+/// quickly fetch the latest commit hash for a branch without cloning
+/// uses git ls-remote which is very fast
+pub fn get_remote_head(url: &str, branch: Option<&str>) -> Result<String> {
+    if !is_remote_url(url) {
+        return Err(anyhow::anyhow!("Invalid URL"));
+    }
+
+    let mut remote = git2::Remote::create_detached(url)?;
+
+    let mut callbacks = git2::RemoteCallbacks::new();
+    callbacks.credentials(|url, username_from_url, allowed_types| {
+        if !is_remote_url(url) {
+            return Err(git2::Error::from_str("Invalid URL"));
+        }
+
+        if allowed_types.contains(git2::CredentialType::SSH_KEY) {
+            if let Ok(cred) = git2::Cred::ssh_key_from_agent(username_from_url.unwrap_or("git")) {
+                return Ok(cred);
+            }
+        }
+
+        if allowed_types.contains(git2::CredentialType::DEFAULT) && url.starts_with("https://") {
+            return git2::Cred::default();
+        }
+
+        Err(git2::Error::from_str("No auth method"))
+    });
+
+    remote.connect_auth(git2::Direction::Fetch, Some(callbacks), None)?;
+
+    let refs = remote.list()?;
+
+    let target_ref = branch.unwrap_or("HEAD");
+    let search_refs = [
+        format!("refs/heads/{}", target_ref),
+        target_ref.to_string(),
+    ];
+
+    for r in refs {
+        let name = r.name();
+        if search_refs.iter().any(|s| name == s) || (target_ref == "HEAD" && name == "HEAD") {
+            return Ok(r.oid().to_string());
+        }
+    }
+
+    // fallback to HEAD
+    for r in refs {
+        if r.name() == "HEAD" {
+            return Ok(r.oid().to_string());
+        }
+    }
+
+    Err(anyhow::anyhow!("Could not find ref {}", target_ref))
 }
 
 pub fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {

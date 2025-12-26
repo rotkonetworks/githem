@@ -514,7 +514,7 @@ impl Ingester {
         Ok(stats)
     }
 
-    pub fn generate_diff(&self, base: &str, head: &str) -> Result<String> {
+    pub fn generate_diff(&self, base: &str, head: &str, context_lines: Option<u32>) -> Result<String> {
         let repo = &self.repo;
 
         // Try to resolve references (branches, tags, or commit hashes)
@@ -537,6 +537,9 @@ impl Ingester {
         let head_tree = head_commit.tree()?;
 
         let mut diff_opts = git2::DiffOptions::new();
+        if let Some(ctx) = context_lines {
+            diff_opts.context_lines(ctx);
+        }
         let diff =
             repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut diff_opts))?;
 
@@ -557,7 +560,149 @@ impl Ingester {
         Ok(output)
     }
 
-    pub fn generate_pr_diff(&self, pr_number: u32) -> Result<String> {
+    pub fn generate_commit_diff(&self, commit_sha: &str, context_lines: Option<u32>) -> Result<String> {
+        let repo = &self.repo;
+
+        // find the commit - use revparse to support short SHAs
+        let object = repo.revparse_single(commit_sha)
+            .with_context(|| format!("Failed to find commit: {}", commit_sha))?;
+
+        let commit = object.peel_to_commit()
+            .with_context(|| format!("Not a commit: {}", commit_sha))?;
+
+        let commit_tree = commit.tree()?;
+
+        // get parent commit's tree (or empty tree if this is the first commit)
+        let parent_tree = if commit.parent_count() > 0 {
+            Some(commit.parent(0)?.tree()?)
+        } else {
+            None
+        };
+
+        let mut diff_opts = git2::DiffOptions::new();
+        if let Some(ctx) = context_lines {
+            diff_opts.context_lines(ctx);
+        }
+        let diff = repo.diff_tree_to_tree(
+            parent_tree.as_ref(),
+            Some(&commit_tree),
+            Some(&mut diff_opts),
+        )?;
+
+        let mut output = String::new();
+        let full_sha = commit.id();
+        output.push_str(&format!("# Commit {}\n\n", full_sha));
+
+        if let Some(summary) = commit.summary() {
+            output.push_str(&format!("Message: {}\n", summary));
+        }
+        if let Some(author) = commit.author().name() {
+            output.push_str(&format!("Author: {}\n", author));
+        }
+        output.push('\n');
+
+        let stats = diff.stats()?;
+        output.push_str(&format!("Files changed: {}\n", stats.files_changed()));
+        output.push_str(&format!("Insertions: {}\n", stats.insertions()));
+        output.push_str(&format!("Deletions: {}\n\n", stats.deletions()));
+
+        diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+            let content = std::str::from_utf8(line.content()).unwrap_or("[binary]");
+            output.push_str(content);
+            true
+        })?;
+
+        Ok(output)
+    }
+
+    pub fn generate_mr_diff(&self, mr_number: u32, context_lines: Option<u32>) -> Result<String> {
+        let repo = &self.repo;
+
+        // gitlab MRs use refs/merge-requests/N/head
+        let mut remote = repo.find_remote("origin")
+            .context("Failed to find origin remote")?;
+
+        let mr_ref = format!("refs/merge-requests/{}/head", mr_number);
+
+        eprintln!("-> Fetching MR !{} and base branches from GitLab...", mr_number);
+
+        // fetch MR ref
+        let mr_refspec = format!("+{}:{}", mr_ref, mr_ref);
+        remote.fetch(&[&mr_refspec], None, None)
+            .context("Failed to fetch MR ref from GitLab")?;
+
+        // fetch common base branches
+        for branch in &["main", "master", "develop"] {
+            let branch_refspec = format!("+refs/heads/{}:refs/remotes/origin/{}", branch, branch);
+            let _ = remote.fetch(&[&branch_refspec], None, None);
+        }
+
+        // get the MR head commit
+        let mr_ref_obj = repo.find_reference(&mr_ref)
+            .context("Failed to find MR ref after fetch")?;
+        let mr_commit = mr_ref_obj.peel_to_commit()
+            .context("Failed to peel MR ref to commit")?;
+
+        // find base branch
+        let base_branches = ["main", "master", "develop"];
+        let mut base_info: Option<(String, git2::Commit)> = None;
+
+        for base_name in &base_branches {
+            let origin_ref = format!("origin/{}", base_name);
+
+            if let Ok((obj, _)) = repo.revparse_ext(&origin_ref) {
+                if let Ok(branch_commit) = obj.peel_to_commit() {
+                    eprintln!("-> Found base branch {} at {}", base_name, branch_commit.id());
+
+                    let base_commit = if let Ok(merge_base_oid) = repo.merge_base(branch_commit.id(), mr_commit.id()) {
+                        if let Ok(merge_base_commit) = repo.find_commit(merge_base_oid) {
+                            eprintln!("-> Using merge base {}", merge_base_oid);
+                            merge_base_commit
+                        } else {
+                            branch_commit
+                        }
+                    } else {
+                        branch_commit
+                    };
+
+                    base_info = Some((base_name.to_string(), base_commit));
+                    break;
+                }
+            }
+        }
+
+        let (base_name, base_commit) = base_info
+            .context("Could not find any base branch (main/master/develop)")?;
+
+        let base_tree = base_commit.tree()?;
+        let mr_tree = mr_commit.tree()?;
+
+        let mut diff_opts = git2::DiffOptions::new();
+        if let Some(ctx) = context_lines {
+            diff_opts.context_lines(ctx);
+        }
+        let diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&mr_tree), Some(&mut diff_opts))?;
+
+        let mut output = String::new();
+        output.push_str(&format!("# Merge Request !{}\n\n", mr_number));
+        output.push_str(&format!("Base: {} ({})\n", base_name, base_commit.id()));
+        output.push_str(&format!("Head: MR !{} ({})\n\n", mr_number, mr_commit.id()));
+
+        let stats = diff.stats()?;
+        output.push_str(&format!("Files changed: {}\n", stats.files_changed()));
+        output.push_str(&format!("Insertions: {}\n", stats.insertions()));
+        output.push_str(&format!("Deletions: {}\n\n", stats.deletions()));
+
+        diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+            let content = std::str::from_utf8(line.content()).unwrap_or("[binary]");
+            output.push_str(content);
+            true
+        })?;
+
+        Ok(output)
+    }
+
+    pub fn generate_pr_diff(&self, pr_number: u32, context_lines: Option<u32>) -> Result<String> {
         let repo = &self.repo;
 
         // Fetch the PR ref and common base branches from GitHub
@@ -623,6 +768,9 @@ impl Ingester {
         let pr_tree = pr_commit.tree()?;
 
         let mut diff_opts = git2::DiffOptions::new();
+        if let Some(ctx) = context_lines {
+            diff_opts.context_lines(ctx);
+        }
         let diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&pr_tree), Some(&mut diff_opts))?;
 
         let mut output = String::new();
