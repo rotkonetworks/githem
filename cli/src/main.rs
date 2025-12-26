@@ -209,7 +209,7 @@ fn handle_compare(owner: &str, repo: &str, compare_spec: Option<&str>, cli: Cli)
     let options = create_ingest_options(&cli);
     let ingester = Ingester::from_url(&url, options)?;
 
-    let diff_content = ingester.generate_diff(&base, &head)?;
+    let diff_content = ingester.generate_diff(&base, &head, None)?;
 
     let mut output: Box<dyn io::Write> = match cli.output {
         Some(path) => Box::new(fs::File::create(path)?),
