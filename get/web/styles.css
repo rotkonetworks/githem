@@ -46,7 +46,7 @@ h2 {
 .install-box {
  background: var(--secondary);
  border: 1px solid #3A4A3F;
- border-radius: 8px;
+ border-radius: 0;
  padding: 1rem;
  margin-bottom: 1rem;
  position: relative;
@@ -69,7 +69,7 @@ h2 {
 .btn {
  border: none;
  padding: 0.5rem 1rem;
- border-radius: 6px;
+ border-radius: 0;
  cursor: pointer;
  font-size: 0.85rem;
  font-weight: 600;
@@ -111,7 +111,7 @@ h2 {
 .input-box {
  background: var(--secondary);
  border: 1px solid #3A4A3F;
- border-radius: 8px;
+ border-radius: 0;
  padding: 1rem;
  margin-top: 2rem;
 }
@@ -127,7 +127,7 @@ h2 {
  border: 1px solid #3A4A3F;
  color: var(--text-light);
  padding: 0.6rem;
- border-radius: 4px;
+ border-radius: 0;
  font-family: 'SF Mono', Monaco, monospace;
  font-size: 0.9rem;
  transition: border-color 0.2s;
@@ -155,7 +155,7 @@ h2 {
  border: 1px solid #3A4A3F;
  color: #9B8A7A;
  padding: 0.35rem 0.75rem;
- border-radius: 16px;
+ border-radius: 0;
  font-size: 0.75rem;
  cursor: pointer;
  transition: all 0.2s;
@@ -185,7 +185,7 @@ h2 {
 .example-box {
  background: var(--secondary);
  border: 1px solid #3A4A3F;
- border-radius: 8px;
+ border-radius: 0;
  padding: 1rem;
  color: var(--text-light);
  text-decoration: none;
@@ -229,7 +229,7 @@ h2 {
 pre {
  background: var(--secondary);
  border: 1px solid #3A4A3F;
- border-radius: 8px;
+ border-radius: 0;
  padding: 1rem;
  margin: 1rem 0;
  overflow-x: auto;
@@ -244,7 +244,7 @@ pre code {
 code {
  background: var(--secondary);
  padding: 0.2rem 0.4rem;
- border-radius: 3px;
+ border-radius: 0;
  font-family: 'SF Mono', Monaco, monospace;
  color: var(--primary);
 }
@@ -253,7 +253,7 @@ table {
  width: 100%;
  border-collapse: collapse;
  background: var(--secondary);
- border-radius: 8px;
+ border-radius: 0;
  overflow: hidden;
  margin: 1rem 0;
 }
@@ -275,12 +275,12 @@ th {
  border-left: 4px solid var(--primary);
  padding: 1rem;
  margin: 1rem 0;
- border-radius: 4px;
+ border-radius: 0;
 }
 
 .faq-item {
  background: var(--secondary);
- border-radius: 8px;
+ border-radius: 0;
  padding: 1.5rem;
  margin-bottom: 1rem;
 }
@@ -353,7 +353,7 @@ th {
 .preset-card {
  background: var(--secondary);
  border: 1px solid #3A4A3F;
- border-radius: 8px;
+ border-radius: 0;
  padding: 1.25rem;
  transition: all 0.2s;
 }

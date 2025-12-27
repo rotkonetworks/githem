@@ -552,6 +552,10 @@ impl Ingester {
         output.push_str(&format!("Deletions: {}\n\n", stats.deletions()));
 
         diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+            let origin = line.origin();
+            if origin == '+' || origin == '-' || origin == ' ' {
+                output.push(origin);
+            }
             let content = std::str::from_utf8(line.content()).unwrap_or("[binary]");
             output.push_str(content);
             true
@@ -607,6 +611,10 @@ impl Ingester {
         output.push_str(&format!("Deletions: {}\n\n", stats.deletions()));
 
         diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+            let origin = line.origin();
+            if origin == '+' || origin == '-' || origin == ' ' {
+                output.push(origin);
+            }
             let content = std::str::from_utf8(line.content()).unwrap_or("[binary]");
             output.push_str(content);
             true
@@ -694,6 +702,10 @@ impl Ingester {
         output.push_str(&format!("Deletions: {}\n\n", stats.deletions()));
 
         diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+            let origin = line.origin();
+            if origin == '+' || origin == '-' || origin == ' ' {
+                output.push(origin);
+            }
             let content = std::str::from_utf8(line.content()).unwrap_or("[binary]");
             output.push_str(content);
             true
@@ -784,6 +796,10 @@ impl Ingester {
         output.push_str(&format!("Deletions: {}\n\n", stats.deletions()));
 
         diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+            let origin = line.origin();
+            if origin == '+' || origin == '-' || origin == ' ' {
+                output.push(origin);
+            }
             let content = std::str::from_utf8(line.content()).unwrap_or("[binary]");
             output.push_str(content);
             true
