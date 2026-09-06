@@ -5,7 +5,24 @@ use githem_core::{
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::Semaphore;
+
+/// caps how many repositories are cloned at the same time so that a burst of
+/// requests cannot fill the temp dir (each in-flight request holds one clone).
+/// override with MAX_CONCURRENT_CLONES.
+fn clone_slots() -> &'static Semaphore {
+    static SLOTS: OnceLock<Semaphore> = OnceLock::new();
+    SLOTS.get_or_init(|| {
+        let n = std::env::var("MAX_CONCURRENT_CLONES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|n: &usize| *n > 0)
+            .unwrap_or(4);
+        Semaphore::new(n)
+    })
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestionParams {
@@ -64,6 +81,7 @@ impl IngestionService {
     pub async fn ingest(
         params: IngestionParams,
     ) -> Result<IngestionResult, Box<dyn std::error::Error + Send + Sync>> {
+        let _slot = clone_slots().acquire().await?;
         let params = Self::normalize_params(params)?;
 
         let filter_preset = if params.raw {
@@ -196,6 +214,7 @@ impl IngestionService {
         _exclude_patterns: Option<&str>,
         context_lines: Option<u32>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let _slot = clone_slots().acquire().await?;
         if !is_remote_url(url) {
             return Err("Diff generation requires a remote URL".into());
         }
@@ -216,6 +235,7 @@ impl IngestionService {
         _exclude_patterns: Option<&str>,
         context_lines: Option<u32>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let _slot = clone_slots().acquire().await?;
         if !is_remote_url(url) {
             return Err("Commit diff generation requires a remote URL".into());
         }
@@ -235,6 +255,7 @@ impl IngestionService {
         _exclude_patterns: Option<&str>,
         context_lines: Option<u32>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let _slot = clone_slots().acquire().await?;
         let options = IngestOptions::default();
         let ingester = if is_remote_url(url) {
             Ingester::from_url(url, options)?
@@ -253,6 +274,7 @@ impl IngestionService {
         _exclude_patterns: Option<&str>,
         context_lines: Option<u32>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let _slot = clone_slots().acquire().await?;
         let options = IngestOptions::default();
         let ingester = if is_remote_url(url) {
             Ingester::from_url(url, options)?
