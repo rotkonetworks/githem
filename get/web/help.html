@@ -93,7 +93,7 @@ githem owner/repo/compare/main...feature</code></pre>
                 <tr><td><code>/{owner}/{repo}/tree/{branch}/{path}</code></td><td>subdirectory</td></tr>
                 <tr><td><code>/{owner}/{repo}/blob/{branch}/{file}</code></td><td>specific file path</td></tr>
                 <tr><td><code>/{owner}/{repo}/commit/{sha}</code></td><td>commit diff</td></tr>
-                <tr><td><code>/{owner}/{repo}/compare/{base}...{head}</code></td><td>branch comparison</td></tr>
+                <tr><td><code>/{owner}/{repo}/compare/{base}...{head}</code></td><td>compare branches, tags or commit shas</td></tr>
                 <tr><td><code>/{owner}/{repo}/pull/{number}</code></td><td>pull request diff</td></tr>
                 <tr><td><code>/{owner}/{repo}/releases/tag/{tag}</code></td><td>tag release</td></tr>
             </table>
@@ -131,6 +131,9 @@ curl "https://githem.com/owner/repo/commit/abc123f?ctx=0"
 
 # compare branches
 curl https://githem.com/owner/repo/compare/main...feature
+
+# compare two commits (short or full sha)
+curl https://githem.com/owner/repo/compare/abc123f...def456a
 
 # pull request
 curl https://githem.com/owner/repo/pull/123

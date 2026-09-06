@@ -103,12 +103,19 @@ pub fn clone_for_compare(url: &str, base_ref: &str, head_ref: &str) -> Result<Re
     fetch_opts.download_tags(git2::AutotagOption::None);
 
     // fetch only the two refs we need for comparison
-    let refspecs = vec![
+    let mut refspecs = vec![
         format!("+refs/heads/{}:refs/remotes/origin/{}", base_ref, base_ref),
         format!("+refs/heads/{}:refs/remotes/origin/{}", head_ref, head_ref),
         format!("+refs/tags/{}:refs/tags/{}", base_ref, base_ref),
         format!("+refs/tags/{}:refs/tags/{}", head_ref, head_ref),
     ];
+
+    // full commit SHAs can be fetched directly (github/gitlab allow any reachable sha in want)
+    for r in [base_ref, head_ref] {
+        if r.len() == 40 && looks_like_sha(r) {
+            refspecs.push(format!("+{}:refs/compare/{}", r, r));
+        }
+    }
 
     // try to fetch, ignoring errors for refs that don't exist
     for refspec in &refspecs {
@@ -117,7 +124,30 @@ pub fn clone_for_compare(url: &str, base_ref: &str, head_ref: &str) -> Result<Re
 
     drop(remote); // drop remote to release borrow on repo
 
+    // short SHAs cannot be fetched by name; if either ref is still unresolved
+    // and looks like a sha, fall back to a full clone so revparse can find it
+    let unresolved = [base_ref, head_ref]
+        .iter()
+        .any(|r| looks_like_sha(r) && !ref_resolves(&repo, r));
+    if unresolved {
+        drop(repo);
+        let _ = std::fs::remove_dir_all(&path);
+        return clone_for_commit(url, "");
+    }
+
     Ok(repo)
+}
+
+/// true if the string could be an abbreviated or full commit sha
+fn looks_like_sha(s: &str) -> bool {
+    (7..=40).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// check whether a ref resolves to a commit in the repo (directly, as origin/ or as a tag)
+fn ref_resolves(repo: &Repository, r: &str) -> bool {
+    [r.to_string(), format!("origin/{r}"), format!("refs/tags/{r}")]
+        .iter()
+        .any(|name| repo.revparse_single(name).is_ok())
 }
 
 /// clone a repository with full history for commit diffing
