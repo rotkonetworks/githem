@@ -1,4 +1,4 @@
-use crate::{cache::*, clone_repository, glob_match, RepositoryMetadata};
+use crate::{cache::*, clone_repository, glob_match, is_temp_clone, RepositoryMetadata};
 use anyhow::{Context, Result};
 use git2::{Repository, Status, StatusOptions};
 use serde::{Deserialize, Serialize};
@@ -63,6 +63,21 @@ pub struct Ingester {
     effective_excludes: Vec<String>,
     pub cache: Option<RepositoryCache>,
     pub cache_key: Option<String>,
+}
+
+/// temporary clones are deleted when the ingester goes away.
+/// repositories opened from a user-supplied local path are never touched.
+impl Drop for Ingester {
+    fn drop(&mut self) {
+        let dir = self
+            .repo
+            .workdir()
+            .map(|w| w.to_path_buf())
+            .unwrap_or_else(|| self.repo.path().to_path_buf());
+        if is_temp_clone(&dir) {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
 }
 
 impl Ingester {

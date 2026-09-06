@@ -39,6 +39,48 @@ pub fn is_remote_url(source: &str) -> bool {
         || source.starts_with("https://gist.githubusercontent.com/")
 }
 
+/// prefix for all temporary clone directories created by githem
+pub const TEMP_CLONE_PREFIX: &str = "githem-";
+
+/// true if `path` is a temporary clone directory created by githem
+/// (lives directly under the system temp dir and carries our prefix)
+pub fn is_temp_clone(path: &Path) -> bool {
+    let tmp = std::env::temp_dir();
+    let in_tmp = path.parent().map(|p| p == tmp).unwrap_or(false);
+    let ours = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with(TEMP_CLONE_PREFIX))
+        .unwrap_or(false);
+    in_tmp && ours
+}
+
+/// remove temporary clone directories older than `max_age`.
+/// catches clones leaked by crashes or killed requests. returns the number removed.
+pub fn cleanup_stale_temp_clones(max_age: std::time::Duration) -> usize {
+    let tmp = std::env::temp_dir();
+    let Ok(entries) = std::fs::read_dir(&tmp) else { return 0 };
+    let now = SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() || !is_temp_clone(&path) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .map(|age| age > max_age)
+            .unwrap_or(true);
+        if stale && std::fs::remove_dir_all(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// clone a bare repository and fetch only specific refs for comparison
 pub fn clone_for_compare(url: &str, base_ref: &str, head_ref: &str) -> Result<Repository> {
     if !is_remote_url(url) {
