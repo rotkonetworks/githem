@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
 use githem_core::{
-    checkout_branch, is_remote_url, parse_github_url, CacheManager, FilterPreset, GitHubUrlType,
+    checkout_branch, clone_for_commit, is_remote_url, parse_github_url, CacheManager, FilterPreset,
+    GitHubUrlType,
     IngestOptions, Ingester,
 };
 use std::fs;
@@ -137,6 +138,7 @@ fn main() -> Result<()> {
             url_type,
         } => match url_type {
             GitHubUrlType::Compare => handle_compare(&owner, &repo, branch.as_deref(), cli),
+            GitHubUrlType::Commit => handle_commit(&owner, &repo, branch.as_deref(), cli),
             _ => handle_github_repo(owner, repo, branch, path, cli),
         },
     }
@@ -178,15 +180,20 @@ fn parse_source(source: &str) -> SourceType {
         }
     }
 
-    if !source.contains("://") && source.contains("/compare/") {
+    // shorthand: owner/repo/compare/base...head and owner/repo/commit/sha
+    if !source.contains("://") {
         let parts: Vec<&str> = source.splitn(4, '/').collect();
-        if parts.len() == 4 && parts[2] == "compare" {
+        if parts.len() == 4 && (parts[2] == "compare" || parts[2] == "commit") {
             return SourceType::GitHub {
                 owner: parts[0].to_string(),
                 repo: parts[1].to_string(),
                 branch: Some(parts[3].to_string()),
                 path: None,
-                url_type: GitHubUrlType::Compare,
+                url_type: if parts[2] == "compare" {
+                    GitHubUrlType::Compare
+                } else {
+                    GitHubUrlType::Commit
+                },
             };
         }
     }
@@ -210,6 +217,27 @@ fn handle_compare(owner: &str, repo: &str, compare_spec: Option<&str>, cli: Cli)
     let ingester = Ingester::from_url(&url, options)?;
 
     let diff_content = ingester.generate_diff(&base, &head, None)?;
+
+    let mut output: Box<dyn io::Write> = match cli.output {
+        Some(path) => Box::new(fs::File::create(path)?),
+        None => Box::new(io::stdout()),
+    };
+
+    write!(output, "{}", diff_content)?;
+
+    Ok(())
+}
+
+fn handle_commit(owner: &str, repo: &str, commit_sha: Option<&str>, cli: Cli) -> Result<()> {
+    let commit_sha = commit_sha.ok_or_else(|| anyhow::anyhow!("Commit sha is required"))?;
+
+    let url = format!("https://github.com/{}/{}", owner, repo);
+
+    // full history clone so short shas and parent commits resolve
+    let repo = clone_for_commit(&url, commit_sha)?;
+    let ingester = Ingester::new(repo, create_ingest_options(&cli));
+
+    let diff_content = ingester.generate_commit_diff(commit_sha, None)?;
 
     let mut output: Box<dyn io::Write> = match cli.output {
         Some(path) => Box::new(fs::File::create(path)?),
